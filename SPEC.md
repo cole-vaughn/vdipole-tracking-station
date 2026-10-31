@@ -257,13 +257,20 @@ Pause points: one local commit per milestone, so progress is saved even if a ses
 |---|---|---|---|
 | Rename firmware files and strings, firmware README rules | M0 | Secret scan finds no old name | Done |
 | .gitignore, secret scan, pre-commit hook, package.json | M0 | `npm run scan` passes; hook blocks a staged secrets.h | Done |
-| Config, data source (SDK), fixture source and dev server | M1 | Site runs with fixtures; empty config shows a calm "not connected" state | |
-| Status bar, freshness, banner, reconnect | M1 | Banner within 1 s of OFFLINE; clears on fresh data | |
-| Theme, grid, battery, fan, touch, RF meter, C/F toggle | M2 | Battery states 100 to null render with no layout shift | |
-| Charging inference module (badge off until tuned) | M2 | Unit tests: spikes do not flip state | |
-| Graphs, history query, downsampling, live append | M3 | Charts show gaps for null; under 1,500 points per series | |
-| Orbit module, gp.json, next pass, deploy workflow | M4 | SGP4 matches the reference vector | |
-| Globe, track, beam, rings, touch ripple | M5 | Canvas renders, no console errors | |
-| RF baseline and level module | M5 | Unit tests for baseline hold during a pass | |
-| Mobile, reduced motion, diagnostics | M6 | 360 px usable; reduced motion stops animation | |
-| Full test run, screenshots, README, handoff list | M7 | All tests pass | |
+| Config, data source (SDK), fixture source and dev server | M1 | Site runs with fixtures; empty config shows a calm "not connected" state || Done |
+| Status bar, freshness, banner, reconnect | M1 | Banner within 1 s of OFFLINE; clears on fresh data || Done |
+| Theme, grid, battery, fan, touch, RF meter, C/F toggle | M2 | Battery states 100 to null render with no layout shift || Done |
+| Charging inference module (badge off until tuned) | M2 | Unit tests: spikes do not flip state || Done |
+| Graphs, history query, downsampling, live append | M3 | Charts show gaps for null; under 1,500 points per series || Done |
+| Orbit module, gp.json, next pass, deploy workflow | M4 | SGP4 matches the reference vector || Done |
+| Globe, track, beam, rings, touch ripple | M5 | Canvas renders, no console errors || Done |
+| RF baseline and level module | M5 | Unit tests for baseline hold during a pass || Done |
+| Mobile, reduced motion, diagnostics | M6 | 360 px usable; reduced motion stops animation || Done |
+| Full test run, screenshots, README, handoff list | M7 | All tests pass || Done |
+
+Built differently from the draft, on purpose:
+
+- Orbit data is fetched inside the deploy workflow instead of committed by a bot (see A8).
+- The history read limit in the rules is 9,000 records (24 h at one per 10 s, plus margin).
+- Headless test browsers log a "GPU stall due to ReadPixels" driver notice from their software GPU. The page never calls
+  readPixels (checked with a probe), so the console test ignores that one notice and nothing else.

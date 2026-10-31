@@ -70,8 +70,8 @@ export function renderRf(rec, rf, satElDeg) {
   $("smeter-needle").style.transform = `rotate(${(-70 + 140 * level).toFixed(1)}deg)`;
   setText("rf-excess", excess === null ? "--" : (excess >= 0 ? "+" : "") + excess.toFixed(1));
   setText("rf-dbm", fmt(dbm, 1));
-  setText("rf-base", base === null ? (isNum(dbm) ? "learning" : "--") : base.toFixed(1));
-  setText("rf-el", isNum(satElDeg) ? `${satElDeg.toFixed(0)}° ${satElDeg > 0 ? "(up)" : "(below horizon)"}` : "--");
+  setText("rf-base", base === null ? (isNum(dbm) ? "learning" : "--") : `${base.toFixed(1)} dBm`);
+  setText("rf-el", isNum(satElDeg) ? `${satElDeg.toFixed(0)}°, ${satElDeg > 0 ? "up" : "down"}` : "--");
   return level;
 }
 

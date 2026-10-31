@@ -1,0 +1,64 @@
+name: Test and deploy
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 */6 * * *" # refresh orbit data every 6 hours (CelesTrak asks for no more than every 2)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Secret scan
+        run: npm run scan
+      - name: Unit tests
+        run: npm run test:unit
+      - run: npx playwright install --with-deps chromium
+      - name: Browser tests (fixture data)
+        run: npx playwright test --grep-invert @screens
+        env:
+          CI: "true"
+
+  deploy:
+    needs: test
+    # Deploy from main after tests pass, and on the 6-hour schedule (no code change, so tests are skipped).
+    if: >-
+      always() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Refresh orbit data (keeps the committed copy if CelesTrak fails)
+        run: node tools/fetch-orbit.mjs || echo "::warning::CelesTrak fetch failed; deploying the committed orbit data"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

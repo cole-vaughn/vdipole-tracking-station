@@ -45,8 +45,8 @@ test("old data shows OFFLINE banner, fresh data clears it", async ({ page }) => 
 });
 
 test("age counter ticks without new data and goes OFFLINE by itself", async ({ page }) => {
+  await page.clock.install(); // before load, so the page's 1 s ticker runs on the controlled clock
   await open(page);
-  await page.clock.install();
   await latest(page, {}, { ageMs: 28_000 });
   await expect(page.locator("#status")).toHaveAttribute("data-state", "delayed");
   await page.clock.runFor(4000);
@@ -135,7 +135,7 @@ test("no horizontal scroll", async ({ page }) => {
 });
 
 test("screenshots for review @screens", async ({ page }, info) => {
-  await open(page);
+  await open(page, ""); // autoplay on, so the status reads LIVE
   await page.waitForTimeout(8000); // globe imagery
   await page.screenshot({ path: `tests/screenshots/${info.project.name}.png`, fullPage: true });
 });

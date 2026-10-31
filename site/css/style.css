@@ -18,6 +18,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
@@ -326,8 +327,10 @@ body[data-station="nodata"] .grid .panel:not(.globe-panel) { opacity: 0.6; filte
   .grid { padding: 12px; }
   .graphs { padding: 8px 12px 16px; }
   .big { font-size: 2rem; }
-  .fan { width: 60px; height: 60px; }
-  .fan-panel .big { font-size: 1.4rem; }
+  .fan-panel { grid-template-columns: 1fr; grid-template-areas: "head" "svg" "num" "note"; }
+  .fan { width: 56px; height: 56px; }
+  .fan-panel .big { font-size: 1.4rem; margin-top: 6px; }
+  .panel-head { flex-wrap: wrap; }
   .touch-state { font-size: 1.15rem; }
   .batt-body { width: 104px; height: 46px; }
 }
