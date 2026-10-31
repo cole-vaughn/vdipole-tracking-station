@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Satellite V-Dipole Tracking Station</title>
+  <meta name="description" content="Live data from a 137 MHz V-dipole ground station: radio level, battery, environment, and the Meteor-M2-4 weather satellite on a 3D globe.">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0a0e14">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0e14'/%3E%3Cpath d='M5 8 16 22 27 8' fill='none' stroke='%234fd1ff' stroke-width='3' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='24' r='2.5' fill='%23ffb454'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js" defer></script>
+  <script type="module" src="js/main.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to station data</a>
+
+  <header class="statusbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M4 7 16 23 28 7"/><circle cx="16" cy="25" r="2.6"/></svg>
+      <h1>Satellite V-Dipole Tracking Station</h1>
+    </div>
+    <div class="status" id="status" data-state="nodata">
+      <span class="status-icon" aria-hidden="true"></span>
+      <span class="status-label" id="status-label">No data</span>
+    </div>
+    <dl class="meta">
+      <div><dt>Data age</dt><dd id="age">--</dd></div>
+      <div><dt>Uptime</dt><dd id="uptime">--</dd></div>
+      <div><dt>WiFi</dt><dd id="wifi">--</dd></div>
+      <div><dt>Last seen</dt><dd id="last-seen">--</dd></div>
+      <div><dt>Local / UTC</dt><dd id="clock">--</dd></div>
+    </dl>
+    <div class="controls">
+      <button type="button" id="unit-toggle" class="btn" aria-label="Temperature unit: Celsius. Switch to Fahrenheit">°C</button>
+      <button type="button" id="diag-toggle" class="btn" aria-expanded="false" aria-controls="diagnostics">Diagnostics</button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" role="status" aria-live="polite" hidden></div>
+
+  <section id="diagnostics" class="diagnostics" aria-label="Diagnostics" hidden>
+    <dl>
+      <div><dt>Data source</dt><dd id="d-source">--</dd></div>
+      <div><dt>Database link</dt><dd id="d-link">--</dd></div>
+      <div><dt>Data age</dt><dd id="d-age">--</dd></div>
+      <div><dt>Clock offset</dt><dd id="d-offset">--</dd></div>
+      <div><dt>Firmware</dt><dd id="d-fw">--</dd></div>
+      <div><dt>Orbit data age</dt><dd id="d-tle">--</dd></div>
+      <div><dt>RF baseline</dt><dd id="d-rf">--</dd></div>
+      <div><dt>Charging inference (untuned)</dt><dd id="d-charge">--</dd></div>
+      <div><dt>Last error</dt><dd id="d-error">none</dd></div>
+    </dl>
+  </section>
+
+  <main id="main" class="grid">
+    <section class="panel globe-panel" aria-labelledby="globe-h">
+      <header class="panel-head">
+        <h2 id="globe-h"><span id="sat-name">Meteor-M2-4</span> <span class="sub" id="sat-downlink"></span></h2>
+        <span class="tag" id="sat-vis">--</span>
+      </header>
+      <div class="globe" id="globe">
+        <p class="globe-msg" id="globe-msg">Loading globe</p>
+      </div>
+      <div class="globe-bar">
+        <dl class="readouts">
+          <div><dt>Azimuth</dt><dd id="sat-az">--</dd></div>
+          <div><dt>Elevation</dt><dd id="sat-el">--</dd></div>
+          <div><dt>Range</dt><dd id="sat-range">--</dd></div>
+          <div><dt>Next pass</dt><dd id="sat-next">--</dd></div>
+          <div><dt>Orbit data</dt><dd id="sat-tle">--</dd></div>
+        </dl>
+        <div class="globe-buttons">
+          <button type="button" class="btn" id="follow-btn" aria-pressed="false">Follow satellite</button>
+          <button type="button" class="btn" id="reset-btn">Reset view</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel battery-panel" aria-labelledby="batt-h">
+      <header class="panel-head">
+        <h2 id="batt-h">Battery <span class="sub">estimate</span></h2>
+        <span class="tag" id="batt-charge" hidden>Charging (inferred)</span>
+      </header>
+      <div class="batt-row">
+        <div class="batt" id="batt" data-band="none" role="img" aria-label="Battery charge unknown">
+          <div class="batt-body"><div class="batt-fill" id="batt-fill"></div></div>
+          <div class="batt-nub"></div>
+        </div>
+        <div class="batt-text">
+          <p class="big"><span id="batt-pct">--</span><span class="unit">%</span></p>
+          <p class="batt-left"><span id="batt-left">--</span> left</p>
+        </div>
+      </div>
+      <p class="warn" id="batt-warn" hidden></p>
+      <dl class="detail">
+        <div><dt>Voltage</dt><dd><span id="batt-v">--</span> V</dd></div>
+        <div><dt>Current</dt><dd><span id="batt-ma">--</span> mA</dd></div>
+        <div><dt>Power</dt><dd><span id="batt-mw">--</span> mW</dd></div>
+        <div><dt>Energy left</dt><dd>~<span id="batt-wh">--</span> Wh</dd></div>
+        <div><dt>Peak current</dt><dd><span id="batt-peak">--</span> mA</dd></div>
+      </dl>
+    </section>
+
+    <section class="panel rf-panel" aria-labelledby="rf-h">
+      <header class="panel-head">
+        <h2 id="rf-h">Signal strength <span class="sub">broadband, 137 MHz</span></h2>
+      </header>
+      <svg class="smeter" viewBox="0 0 220 120" role="img" aria-labelledby="rf-meter-label">
+        <title id="rf-meter-label">Signal meter</title>
+        <!-- Arc of radius 80 around (110, 105), sweeping -70 to +70 degrees from vertical. -->
+        <path class="smeter-arc" d="M 34.82 77.64 A 80 80 0 0 1 185.18 77.64"/>
+        <path class="smeter-hot" d="M 155.89 39.47 A 80 80 0 0 1 185.18 77.64"/>
+        <g class="smeter-ticks" id="smeter-ticks"></g>
+        <line class="smeter-needle" id="smeter-needle" x1="110" y1="105" x2="110" y2="33"/>
+        <circle class="smeter-hub" cx="110" cy="105" r="5"/>
+      </svg>
+      <dl class="detail rf-detail">
+        <div><dt>Above baseline</dt><dd><span id="rf-excess">--</span> dB</dd></div>
+        <div><dt>Reading</dt><dd><span id="rf-dbm">--</span> dBm</dd></div>
+        <div><dt>Baseline</dt><dd><span id="rf-base">--</span> dBm</dd></div>
+        <div><dt>Satellite elevation</dt><dd id="rf-el">--</dd></div>
+      </dl>
+      <p class="note">One power number from the antenna chain, not a spectrum. A rise can be interference, so compare it with the satellite elevation.</p>
+    </section>
+
+    <section class="panel fan-panel" aria-labelledby="fan-h">
+      <header class="panel-head"><h2 id="fan-h">Fan</h2><span class="tag" id="fan-state">--</span></header>
+      <svg class="fan" viewBox="0 0 100 100" aria-hidden="true">
+        <circle class="fan-ring" cx="50" cy="50" r="46"/>
+        <g class="fan-blades" id="fan-blades">
+          <path d="M50 50 C 44 30, 52 12, 64 10 C 66 24, 60 40, 50 50Z"/>
+          <path d="M50 50 C 44 30, 52 12, 64 10 C 66 24, 60 40, 50 50Z" transform="rotate(72 50 50)"/>
+          <path d="M50 50 C 44 30, 52 12, 64 10 C 66 24, 60 40, 50 50Z" transform="rotate(144 50 50)"/>
+          <path d="M50 50 C 44 30, 52 12, 64 10 C 66 24, 60 40, 50 50Z" transform="rotate(216 50 50)"/>
+          <path d="M50 50 C 44 30, 52 12, 64 10 C 66 24, 60 40, 50 50Z" transform="rotate(288 50 50)"/>
+        </g>
+        <circle class="fan-hub" cx="50" cy="50" r="8"/>
+      </svg>
+      <p class="big"><span id="fan-rpm">--</span><span class="unit">RPM</span></p>
+      <p class="note">Speed also falls as the battery drains.</p>
+    </section>
+
+    <section class="panel touch-panel" id="touch-panel" aria-labelledby="touch-h">
+      <header class="panel-head"><h2 id="touch-h">Touch pad</h2></header>
+      <div class="touch-state" id="touch-state" data-state="unknown">
+        <span class="touch-dot" aria-hidden="true"></span>
+        <span id="touch-label">--</span>
+      </div>
+      <dl class="detail">
+        <div><dt>Presses since boot</dt><dd id="touch-count">--</dd></div>
+        <div><dt>Last touch</dt><dd id="touch-last">--</dd></div>
+        <div><dt>Delay change</dt><dd><span id="touch-delta">--</span> µs</dd></div>
+      </dl>
+    </section>
+
+    <section class="panel env-panel" aria-labelledby="env-h">
+      <header class="panel-head"><h2 id="env-h">Environment</h2></header>
+      <div class="env-row">
+        <div>
+          <p class="label">Air (BMP388)</p>
+          <p class="big"><span id="env-bmp">--</span><span class="unit temp-unit">°C</span></p>
+        </div>
+        <div>
+          <p class="label">Thermistor <span class="tag tag-warn" id="therm-tag">unverified</span></p>
+          <p class="big"><span id="env-therm">--</span><span class="unit temp-unit">°C</span></p>
+          <p class="note">Raw <span id="env-therm-raw">--</span></p>
+        </div>
+      </div>
+      <p class="note">Pressure and altitude are in the graphs below.</p>
+    </section>
+  </main>
+
+  <section class="graphs" aria-labelledby="graphs-h">
+    <header class="graphs-head">
+      <h2 id="graphs-h">Graphs</h2>
+      <div class="range" role="group" aria-label="Time range" id="range-group"></div>
+    </header>
+    <div class="tabs" role="tablist" aria-label="Graph groups" id="graph-tabs"></div>
+    <p class="graphs-msg" id="graphs-msg" role="status"></p>
+    <div id="graph-panels"></div>
+  </section>
+
+  <footer class="footer">
+    <p>Live readings from a student-built 137 MHz ground station (V-dipole antenna, LNA with 137 MHz filter, log power detector, ESP32). Every number on this page comes from the station or from public orbit data. Missing readings show as "--".</p>
+    <p>Satellite positions: SGP4 from CelesTrak orbital elements. Globe imagery: Natural Earth via CesiumJS.</p>
+  </footer>
+</body>
+</html>
