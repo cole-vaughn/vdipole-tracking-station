@@ -1,0 +1,17 @@
+secrets.h
+*.bin
+*.elf
+build/
+node_modules/
+.DS_Store
+
+# The draft briefing PDF is replaced by SPEC.md and is not published.
+/*.pdf
+
+# Test output
+test-results/
+playwright-report/
+tests/screenshots/
+
+# Local Claude Code skills (third-party, see .claude/skills/SOURCES.md); not part of the project
+.claude/

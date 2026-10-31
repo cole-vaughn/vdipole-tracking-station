@@ -1,0 +1,5 @@
+secrets.h
+*.bin
+*.elf
+build/
+node_modules/

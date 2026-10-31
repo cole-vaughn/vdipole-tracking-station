@@ -1,0 +1,3 @@
+#!/bin/sh
+# Blocks commits that contain credentials or the old project name.
+node tests/secret-scan.mjs --staged
