@@ -62,6 +62,20 @@ export function fmtClock(date, utc = false) {
     : `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
+export function fmtHm(date, utc = false) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "--";
+  return utc ? `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}` : `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+// "Today", "Tomorrow", or a short weekday, in the viewer's time zone.
+export function dayLabel(date, now = new Date()) {
+  const start = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((start(date) - start(now)) / 86400e3);
+  if (days === 0) return "Today";
+  if (days === 1) return "Tomorrow";
+  return date.toLocaleDateString("en-US", { weekday: "short" });
+}
+
 // "HH:MM" countdown, used for "next pass in".
 export function fmtCountdown(ms) {
   if (!isNum(ms)) return "--";

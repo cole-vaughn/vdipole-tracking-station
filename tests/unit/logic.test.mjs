@@ -182,3 +182,15 @@ test("orbit data: TLE checksums", () => {
   assert.equal(tleChecksumOk(VALLADO.tle1), true);
   assert.equal(tleChecksumOk(VALLADO.tle1.slice(0, 68) + "0"), false);
 });
+
+test("orbit: upcoming passes are in order and do not overlap", () => {
+  const sat = { name: "M2-4", tle1: "1 59051U 24039A   26303.94288269  .00000017  00000+0  27506-4 0  9991",
+    tle2: "2 59051  98.7217 261.6501 0007768 130.9990 229.1861 14.22441657138564" };
+  const tr = createTracker(sat, STATION, satlib);
+  const passes = tr.nextPasses(new Date(Date.UTC(2026, 9, 31, 0, 0, 0)), 5, 48, 0);
+  assert.equal(passes.length, 5);
+  for (let i = 0; i < passes.length; i++) {
+    assert.ok(passes[i].aos < passes[i].los);
+    if (i) assert.ok(passes[i].aos > passes[i - 1].los, "no overlap");
+  }
+});

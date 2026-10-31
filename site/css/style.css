@@ -207,6 +207,15 @@ body[data-station="nodata"] .grid .panel:not(.globe-panel) { opacity: 0.6; filte
 .readouts dt { color: var(--muted); font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; }
 .readouts dd { font-size: 1rem; }
 .globe-buttons { display: flex; gap: 8px; }
+.passes { padding: 4px 16px 14px; background: var(--panel-2); }
+.passes-head { margin: 0 0 6px; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.passes-head .sub { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.pass-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+.pass-table th { text-align: left; font-weight: 400; color: var(--muted); font-size: 0.78rem; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); }
+.pass-table td { padding: 5px 8px 5px 0; font-family: var(--font-num); font-variant-numeric: tabular-nums; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.pass-table td:first-child { font-family: var(--font-ui); }
+.pass-table tr.now td { color: var(--good); }
+.pass-table .tag { font-family: var(--font-ui); padding: 0 6px; font-size: 0.72rem; }
 #sat-vis[data-up="true"] { color: var(--good); border-color: color-mix(in srgb, var(--good) 55%, transparent); }
 
 /* ---------- Battery ---------- */

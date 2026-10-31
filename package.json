@@ -9,10 +9,14 @@
     "test:unit": "node --test tests/unit/*.test.mjs",
     "test:e2e": "playwright test",
     "screenshots": "playwright test --grep @screens",
-    "scan": "node tests/secret-scan.mjs"
+    "scan": "node tests/secret-scan.mjs",
+    "vendor": "node tools/vendor.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",
-    "satellite.js": "7.1.0"
+    "esbuild": "^0.28.2",
+    "globe.gl": "^2.46.2",
+    "satellite.js": "7.1.0",
+    "three": "^0.186.1"
   }
 }

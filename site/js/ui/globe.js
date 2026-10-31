@@ -1,10 +1,9 @@
-// 3D globe: three.js through globe.gl (pinned CDN builds, mapped in index.html). Free textures, no key or account:
+// 3D globe: three.js through globe.gl, self-hosted in site/vendor/ (see tools/vendor.mjs). Self-hosted textures:
 // NASA Blue Marble by day and NASA Earth at Night city lights, blended along the real sunrise line.
-import * as THREE from "three";
-import Globe from "globe.gl";
+import { THREE, Globe } from "../../vendor/globe.lib.js";
 import { buildSatellite } from "./satellite-model.js";
 
-const IMG = "https://cdn.jsdelivr.net/npm/three-globe@2.45.6/example/img/";
+const TEXTURES = new URL("../../textures/", import.meta.url).href;
 const R_KM = 6371;
 const RAD = Math.PI / 180;
 
@@ -44,14 +43,29 @@ const fragmentShader = `
     gl_FragColor = mix(night * 1.25, day, smoothstep(-0.12, 0.12, intensity));
   }`;
 
+// Background stars drawn in code (random points on a far sphere), so there is no image to download or license.
+function starfield() {
+  const n = 1800, pos = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const u = Math.random() * 2 - 1, a = Math.random() * Math.PI * 2, r = 2500;
+    const k = Math.sqrt(1 - u * u);
+    pos.set([r * k * Math.cos(a), r * u, r * k * Math.sin(a)], i * 3);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  return new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xc8d6e5, size: 1.4, sizeAttenuation: false, transparent: true, opacity: 0.75 }));
+}
+
 export async function createGlobe(container, { station, satName }) {
   const reduced = matchMedia("(prefers-reduced-motion: reduce)");
   const small = matchMedia("(max-width: 699px)").matches;
 
+  // Phones get 2K textures (about 0.8 MB instead of 2.2 MB).
+  const res = small ? "2k" : "4k";
   const loader = new THREE.TextureLoader();
   const [day, night] = await Promise.all([
-    loader.loadAsync(IMG + "earth-blue-marble.jpg"),
-    loader.loadAsync(IMG + "earth-night.jpg"),
+    loader.loadAsync(`${TEXTURES}earth-day-${res}.jpg`),
+    loader.loadAsync(`${TEXTURES}earth-night-${res}.jpg`),
   ]);
   const material = new THREE.ShaderMaterial({
     uniforms: {
@@ -66,9 +80,10 @@ export async function createGlobe(container, { station, satName }) {
   const fit = () => globe.width(container.clientWidth).height(container.clientHeight);
   fit();
   new ResizeObserver(fit).observe(container);
-  globe.globeMaterial(material).backgroundImageUrl(IMG + "night-sky.png")
+  globe.globeMaterial(material).backgroundColor("#05080d")
     .atmosphereColor("#8fdcff").atmosphereAltitude(0.16)
     .onZoom(({ lng, lat }) => material.uniforms.globeRotation.value.set(lng, lat));
+  globe.scene().add(starfield());
 
   // Satellite: illustrative model (not an exact replica), drawn about 500 km across so it can be seen.
   // globe.gl turns the outer group to face Earth; the inner tilt lets a top-down camera see the wings.

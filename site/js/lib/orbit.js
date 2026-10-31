@@ -87,7 +87,21 @@ export function createTracker(sat, station, satlib) {
     return null;
   }
 
-  return { satrec, epoch, eciAt, positionAt, track, nextPass };
+  // The next few passes in time order (the first one may be in progress).
+  function nextPasses(from, count = 5, searchHours = 48, minEl = 0) {
+    const out = [];
+    const end = from.getTime() + searchHours * 3600e3;
+    let t = from;
+    while (out.length < count && t.getTime() < end) {
+      const p = nextPass(t, (end - t.getTime()) / 3600e3, minEl);
+      if (!p) break;
+      out.push(p);
+      t = new Date(p.los.getTime() + 60e3);
+    }
+    return out;
+  }
+
+  return { satrec, epoch, eciAt, positionAt, track, nextPass, nextPasses };
 }
 
 // Radius on the ground of the area that can see the satellite (elevation above 0).

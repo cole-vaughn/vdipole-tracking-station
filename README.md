@@ -25,8 +25,11 @@ GitHub Actions, every 6 h --> CelesTrak orbit data --> site/data/gp.json --> thi
 | `site/js/config.js` | Every setting: database address, station location, thresholds, RF and charging constants. |
 | `site/js/lib/` | Pure logic with unit tests (freshness, battery, charging inference, RF baseline, SGP4, graph data). |
 | `site/data/gp.json` | Orbit data. Refreshed on every deploy. |
+| `site/vendor/` | Self-hosted three.js, globe.gl and satellite.js, bundled by `npm run vendor` (do not edit by hand). |
+| `site/textures/` | Earth textures (4K for laptops, 2K for phones). |
 | `tests/` | Unit tests, browser tests, the labeled fixture data source, the local preview server, the secret scan. |
 | `tools/fetch-orbit.mjs` | Downloads orbit data from CelesTrak. |
+| `tools/vendor.mjs` | Rebuilds `site/vendor/` from the versions pinned in `package.json`. |
 | `firmware/` | ESP32 firmware and its own README (pin map, Firebase setup, hardware checklist). |
 
 ## Run it on your computer
@@ -39,6 +42,10 @@ npx playwright install chromium   # only needed for the browser tests
 npm run dev:fixtures              # http://localhost:4173 with labeled TEST FIXTURE data
 npm run dev                       # http://localhost:4173 with the real database (once config.js has its address)
 ```
+
+The site has no build step. The globe libraries are bundled once into `site/vendor/` and committed. After changing
+the version of `three`, `globe.gl` or `satellite.js` in `package.json`, run `npm install` and `npm run vendor`, then
+commit the result.
 
 ## Tests
 
@@ -91,3 +98,9 @@ v1 shows the first satellite in the list. The orbit code works for any of them.
 - The battery percent is an estimate. "Charging" is only ever inferred, and its badge stays off until it is tuned on a
   real logged charge (`charging.showBadge` in `config.js`; the live inference is visible in Diagnostics).
 - The thermistor carries an unverified legacy calibration and is tagged "unverified" until checked against the BMP388.
+
+## Credits
+
+- Earth textures: NASA Blue Marble and NASA Earth at Night (public domain), in the versions shipped with three-globe.
+- Libraries: three.js, globe.gl and three-globe (MIT), satellite.js (MIT), Chart.js (MIT), Firebase JS SDK (Apache 2.0).
+- Orbit data: CelesTrak. The background stars are drawn in code.

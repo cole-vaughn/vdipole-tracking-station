@@ -125,6 +125,8 @@ test("satellite readouts and the globe canvas appear", async ({ page }) => {
   await open(page);
   await expect(page.locator("#sat-el")).toHaveText(/-?\d+\.\d°/);
   await expect(page.locator("#sat-next")).not.toHaveText("--");
+  await expect(page.locator("#pass-rows tr")).toHaveCount(5);
+  await expect(page.locator("#pass-rows tr").first()).toContainText(/\d\d:\d\d/);
   await expect(page.locator("#globe canvas")).toBeVisible({ timeout: 30_000 });
 });
 

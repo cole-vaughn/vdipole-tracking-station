@@ -25,6 +25,9 @@ export const CONFIG = {
     trackMinutes: 50,      // ground track drawn this far back and ahead
     passSearchHours: 24,
     minPassElevationDeg: 0,
+    passListCount: 5,      // upcoming passes table
+    passListHours: 48,
+    lowPassDeg: 15,        // passes peaking below this are marked "low" (weak signal expected)
   },
 
   // RF visuals use dB above a rolling baseline, never absolute dBm (SPEC F4). All untuned.

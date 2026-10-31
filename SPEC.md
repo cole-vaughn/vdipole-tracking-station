@@ -34,14 +34,14 @@ Success criteria (from the draft, unchanged):
 | D1 | Backend is Firebase Realtime Database on the Spark plan. The ESP32 writes, the site only reads. | Fast push updates, no field cap, no card. | Draft, kept |
 | D2 | Firebase is not set up yet. Cole creates the project, database and the one ESP32 user using the firmware README steps. | The agent cannot create the account. | Q1 |
 | D3 | New repo, public. The v1 repo is not reused. The agent commits locally only. Cole creates the remote, pushes, and enables Pages. | Clean history. v1 only ever held the HTML file, but a fresh start is simpler. | Q2 |
-| D4 | Plain static files with pinned CDN libraries. No build tool. | Matches v1, no deploy step, easy to explain. | Q3 |
+| D4 | Plain static files, no build step for the site. Firebase SDK, Chart.js and fonts come from pinned CDNs; the globe libraries (three.js, globe.gl, satellite.js) and Earth textures are self-hosted in `site/vendor/` and `site/textures/`, bundled once by `npm run vendor` and committed. | Matches v1, easy to explain; self-hosting removes the biggest runtime dependency on third-party CDNs. | Q3, extended |
 | D5 | Globe (changed 2026-10-31, option A of three prototypes): three.js through globe.gl with NASA Blue Marble by day and NASA Earth at Night by night, blended along the real sunrise line. No token, no account. Replaces Cesium, which looked soft (half-resolution rendering) and glitchy. | Cole picked it after comparing three working prototypes. | Q4, revised |
 | D6 | Charging state is inferred, never read. See section 7, F2. It is shown as "Charging (inferred)" with a hysteresis band so small spikes do not flip it. | Cole asked for an intelligent inference. The sensor probably cannot see charge current. | Q5 |
 | D7 | Freshness: LIVE under 6 s, DELAYED 6 to 30 s, OFFLINE over 30 s. All in config. | Station writes every 2 s. | Q6 |
 | D8 | Temperature has a C/F toggle. Times show in the viewer's local time and UTC. Data is stored in UTC and Celsius. | Friendlier for US viewers. | Q7 |
 | D9 | Pressure and altitude appear only in the graphs section. The firmware keeps sending them. | Cole does not want them in the main area. | Q8 |
 | D10 | A touch makes a ripple on the station marker and briefly highlights the touch card. No sound. | Cole chose the proposal. | Q9 |
-| D11 | Include a minimal "next pass in HH:MM" line, computed from the same orbit data as the globe. | Gives the idle page a purpose. | Q10 |
+| D11 | Show "next pass in HH:MM" and a table of the next 5 passes (day, start, end, length, highest elevation, with passes under 15 degrees marked low), computed from the same orbit data as the globe. | Gives the idle page a purpose. The table was added 2026-10-31 at Cole's request. | Q10, extended |
 | D12 | Graph ranges are 15 min, 1 h, 6 h, 24 h. No pruning job, no rollups, so no admin credential anywhere. Old history is deleted by hand in the Firebase console (see Risks). | Keeps v1 credential free. | Q11 |
 | D13 | The old v1 page is taken down by Cole after v2 is live. No history import. Old numbers include mock values and must not mix with real data. The agent does not touch v1. | Cole's call. | Q12 |
 | D14 | Station location is one config value: 33.92 N, 84.84 W (Dallas, GA, two decimals). Moving to Athens, GA later is a one-line change. | Rounded to about 1 km for privacy. | Q13 |

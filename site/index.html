@@ -13,14 +13,6 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="css/style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js" defer></script>
-  <!-- Pinned versions for the globe (three.js and globe.gl, as ES modules). -->
-  <script type="importmap">
-    { "imports": {
-      "three": "https://esm.sh/three@0.186.1",
-      "three/": "https://esm.sh/three@0.186.1/",
-      "globe.gl": "https://esm.sh/globe.gl@2.46.2?external=three"
-    } }
-  </script>
   <script type="module" src="js/main.js"></script>
 </head>
 <body>
@@ -81,6 +73,13 @@
           <button type="button" class="btn" id="follow-btn" aria-pressed="false">Follow satellite</button>
           <button type="button" class="btn" id="reset-btn">Reset view</button>
         </div>
+      </div>
+      <div class="passes">
+        <h3 class="passes-head">Upcoming passes <span class="sub">your local time, from the orbit data</span></h3>
+        <table class="pass-table">
+          <thead><tr><th scope="col">Day</th><th scope="col">Starts</th><th scope="col">Ends</th><th scope="col">Length</th><th scope="col">Highest</th></tr></thead>
+          <tbody id="pass-rows"><tr><td colspan="5">--</td></tr></tbody>
+        </table>
       </div>
     </section>
 
