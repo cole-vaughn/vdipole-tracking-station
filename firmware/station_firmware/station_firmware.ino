@@ -40,6 +40,22 @@
 
 #define FW_VERSION "vdipole-fw-1.0"
 
+// Shared telemetry snapshot (loop() writes, the upload task reads). Declared up here because the Arduino IDE
+// generates function prototypes at the top of the sketch, and buildTelemetryJson() takes this type.
+struct Telemetry {
+  float tempC, pressHPa, altitudeM;
+  float thermRaw, thermFilt, rfRawDBm, rfFilt;
+  float capTdUs, capDeltaUs, capPF;
+  bool  capPressed, capFault;
+  uint32_t touchCount;
+  bool  inaOk;
+  float battV, battmA, battmW, battSocPct, battWhLeft, battHoursLeft, battPeakmA;
+  float fanRpm;
+  bool  fanStalled;
+  int   rssi;
+  uint32_t uptimeS;
+};
+
 // ---------- General config ----------
 #define SEALEVELPRESSURE_HPA  (1013.25)
 #define READ_INTERVAL_MS      2000    // BMP388, mux sensors, INA219, fan, battery
@@ -506,7 +522,7 @@ bool  fanStalled = false;
 void IRAM_ATTR tachISR() {
   int64_t t = esp_timer_get_time();
   if (t - tachLastEdgeUs > TACH_DEBOUNCE_US) {
-    tachPulses++;
+    tachPulses = tachPulses + 1;   // not "++": incrementing a volatile is deprecated in C++20
     tachLastEdgeUs = t;
   }
 }
@@ -536,20 +552,6 @@ float tempC = NAN, pressHPa = NAN, altitudeM = NAN;
 float thermRaw = 0, thermFiltered = 0;
 float rfRawDBm = 0, rfFiltered = 0;
 int   thermCounts = 0, rfCounts = 0;
-
-struct Telemetry {
-  float tempC, pressHPa, altitudeM;
-  float thermRaw, thermFilt, rfRawDBm, rfFilt;
-  float capTdUs, capDeltaUs, capPF;
-  bool  capPressed, capFault;
-  uint32_t touchCount;
-  bool  inaOk;
-  float battV, battmA, battmW, battSocPct, battWhLeft, battHoursLeft, battPeakmA;
-  float fanRpm;
-  bool  fanStalled;
-  int   rssi;
-  uint32_t uptimeS;
-};
 
 Telemetry tel;
 SemaphoreHandle_t telMutex;

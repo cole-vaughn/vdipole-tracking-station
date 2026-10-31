@@ -3,8 +3,7 @@
 Single-sketch firmware for the Satellite V-Dipole Tracking Station (ESP32 DOIT DevKit V1, ELEE 4230/6230).
 It reads every sensor, drives the LCD, and uploads to Firebase Realtime Database.
 
-**Status: written, NOT compiled, NOT run on hardware.** The first job is to compile it, fix whatever the
-compiler reports, then walk through the test checklist at the bottom. Nothing here has been measured on the
+**Status: compiles cleanly (2026-10-31), NOT yet run on hardware.** Walk through the test checklist at the bottom. Nothing here has been measured on the
 finished enclosure, so every value marked `PLACEHOLDER` in the sketch is a guess until it is measured.
 
 ## Files
@@ -26,6 +25,13 @@ and regenerate the ThingSpeak write key.
 - Libraries (Library Manager): Adafruit BMP3XX, Adafruit INA219 (accept the BusIO and Unified Sensor dependencies).
 - Built in: Wire, LiquidCrystal, WiFi, WiFiClientSecure, HTTPClient, Preferences.
 - Serial Monitor: 115200 baud.
+- Verified build (2026-10-31): arduino-esp32 core 3.3.12, Adafruit BMP3XX 2.1.6, Adafruit INA219 1.2.3,
+  Adafruit BusIO 1.17.4, Adafruit Unified Sensor 1.1.15, LiquidCrystal 1.0.7. Board "DOIT ESP32 DEVKIT V1".
+  Result: 1,091,180 bytes of flash (83%), 51,736 bytes of RAM (15%). The only warnings are inside the Adafruit INA219
+  library itself.
+- Command-line build (optional): `arduino-cli compile --fqbn esp32:esp32:esp32doit-devkit-v1 firmware/station_firmware`
+  (needs `secrets.h` in that folder). If arduino-cli says `LiquidCrystal.h` is missing, run
+  `arduino-cli lib install "LiquidCrystal"`; the Arduino IDE already includes it.
 - If the compiler complains about `portENTER_CRITICAL` or the `soc/gpio_reg.h` register names, the arduino-esp32 major
   version changed an API. Fix it there; the intent is "poll GPIO16 with interrupts off on this core while timing".
 
@@ -204,7 +210,7 @@ The old CP4 report numbers were mock values. Do not present any of them as acqui
 
 ## First-run test checklist
 
-1. Compile. Fix whatever the compiler reports.
+1. Compile (already verified with the versions above).
 2. Flash with `FAN_ENABLED 0`, USB only (no 12 V). Confirm the LCD, I2C (BMP388 and INA219 lines in Serial), WiFi, and a
    successful sign-in line (`Firebase sign-in -> HTTP 200`).
 3. Check the Firebase console: `/station/latest` appears and updates, `/station/history` grows by one record per 10 s,
