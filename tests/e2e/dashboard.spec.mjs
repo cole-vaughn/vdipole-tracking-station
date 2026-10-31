@@ -24,7 +24,7 @@ const latest = (page, patch, opts) => page.evaluate(([p, o]) => window.__fixture
 test("loads with no console errors and shows the fixture label", async ({ page }, info) => {
   await open(page, "");
   await expect(page.locator("#fixture-label")).toContainText("TEST FIXTURE DATA");
-  await expect(page.locator("#status")).toHaveAttribute("data-state", "live");
+  await expect(page.locator("body")).toHaveAttribute("data-station", "live");
   await expect(page.locator("h1")).toHaveText("Satellite V-Dipole Tracking Station");
   // Give the lazy globe and the orbit module time to start, then check the console.
   await page.waitForTimeout(6000);
@@ -34,13 +34,13 @@ test("loads with no console errors and shows the fixture label", async ({ page }
 test("old data shows OFFLINE banner, fresh data clears it", async ({ page }) => {
   await open(page);
   await latest(page, {}, { ageMs: 45_000 });
-  await expect(page.locator("#status")).toHaveAttribute("data-state", "offline", { timeout: 1500 });
+  await expect(page.locator("body")).toHaveAttribute("data-station", "offline", { timeout: 1500 });
   await expect(page.locator("#banner")).toBeVisible();
   await expect(page.locator("#banner")).toContainText("Station offline");
   await latest(page, {}, { ageMs: 10_000 });
-  await expect(page.locator("#status")).toHaveAttribute("data-state", "delayed");
+  await expect(page.locator("body")).toHaveAttribute("data-station", "delayed");
   await latest(page, {});
-  await expect(page.locator("#status")).toHaveAttribute("data-state", "live");
+  await expect(page.locator("body")).toHaveAttribute("data-station", "live");
   await expect(page.locator("#banner")).toBeHidden();
 });
 
@@ -48,9 +48,9 @@ test("age counter ticks without new data and goes OFFLINE by itself", async ({ p
   await page.clock.install(); // before load, so the page's 1 s ticker runs on the controlled clock
   await open(page);
   await latest(page, {}, { ageMs: 28_000 });
-  await expect(page.locator("#status")).toHaveAttribute("data-state", "delayed");
+  await expect(page.locator("body")).toHaveAttribute("data-station", "delayed");
   await page.clock.runFor(4000);
-  await expect(page.locator("#status")).toHaveAttribute("data-state", "offline");
+  await expect(page.locator("body")).toHaveAttribute("data-station", "offline");
 });
 
 test("battery widget states and no layout shift", async ({ page }) => {
@@ -139,4 +139,19 @@ test("screenshots for review @screens", async ({ page }, info) => {
   await page.waitForTimeout(8000); // globe imagery
   await page.screenshot({ path: `tests/screenshots/${info.project.name}.png`, fullPage: true });
   await page.screenshot({ path: `tests/screenshots/${info.project.name}-first-view.png` });
+});
+
+test("hover shows every series at the cursor's time", async ({ page }) => {
+  await open(page);
+  await page.locator("#tab-radio").click();
+  const canvas = page.locator('[data-chart="rf"] canvas');
+  await expect(canvas).toBeVisible();
+  await page.waitForFunction(() => window.Chart?.getChart(document.querySelector('[data-chart="rf"] canvas'))?.data.datasets[0].data.length > 50);
+  const box = await canvas.boundingBox();
+  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2);
+  const active = await page.evaluate(() => {
+    const c = window.Chart.getChart(document.querySelector('[data-chart="rf"] canvas'));
+    return c.tooltip.getActiveElements().map((a) => a.datasetIndex);
+  });
+  expect(active.sort()).toEqual([0, 1]); // raw and filtered together, not hopping between them
 });

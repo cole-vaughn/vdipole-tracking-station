@@ -32,6 +32,50 @@ const GROUPS = [
   ] },
 ];
 
+// Hover: for each series, the reading nearest the cursor's time (binary search), so the tooltip shows every
+// series at one moment instead of hopping between lines. Nothing is shown inside a gap.
+function registerHover(Chart) {
+  if (Chart.Interaction.modes.timeEach) return;
+  Chart.Interaction.modes.timeEach = (chart, e) => {
+    const px = e.x ?? Chart.helpers.getRelativePosition(e, chart).x;
+    const { left, right } = chart.chartArea;
+    if (px < left || px > right) return [];
+    const xv = chart.scales.x.getValueForPixel(px);
+    const items = [];
+    chart.data.datasets.forEach((ds, di) => {
+      const data = ds.data;
+      const meta = chart.getDatasetMeta(di);
+      if (meta.hidden || !data.length) return;
+      let lo = 0, hi = data.length - 1;
+      while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (data[mid].x < xv) lo = mid; else hi = mid; }
+      const i = Math.abs(data[lo].x - xv) <= Math.abs(data[hi].x - xv) ? lo : hi;
+      const el = meta.data[i];
+      if (!el || data[i].y === null || Math.abs(el.x - px) > 30) return;
+      items.push({ element: el, datasetIndex: di, index: i });
+    });
+    return items;
+  };
+}
+
+// Vertical line that follows the (animated) tooltip, so the hover moves smoothly.
+const crosshair = {
+  id: "crosshair",
+  afterDatasetsDraw(chart) {
+    const tip = chart.tooltip;
+    if (!tip || !tip.opacity || !tip.getActiveElements().length) return;
+    const { ctx, chartArea: { top, bottom } } = chart;
+    ctx.save();
+    ctx.globalAlpha = tip.opacity;
+    ctx.strokeStyle = "rgba(125, 143, 163, 0.55)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(Math.round(tip.caretX) + 0.5, top);
+    ctx.lineTo(Math.round(tip.caretX) + 0.5, bottom);
+    ctx.stroke();
+    ctx.restore();
+  },
+};
+
 const pad = (n) => String(n).padStart(2, "0");
 const tick = (v) => { const d = new Date(v); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
@@ -143,10 +187,12 @@ export function createGraphs({ config, now, getUnit, onError }) {
   }
 
   // ----- Drawing -----
-  function datasetPoints(series, unit, from) {
+  // About one point per pixel of chart width (never more than the spec's 1,500): smooth lines, calm hover.
+  function datasetPoints(series, unit, from, widthPx) {
     const inRange = records.filter((r) => r.ts >= from);
     const transform = series.unit === "temp" ? (v) => toUnit(v, unit) : (v) => v;
-    return downsample(insertGaps(pickSeries(inRange, series.field, transform), g.gapMs), g.maxPoints);
+    const max = Math.min(g.maxPoints, Math.max(200, Math.round(widthPx)));
+    return downsample(insertGaps(pickSeries(inRange, series.field, transform), g.gapMs), max);
   }
 
   function redraw() {
@@ -154,13 +200,15 @@ export function createGraphs({ config, now, getUnit, onError }) {
     if (!Chart) { msg.textContent = "The charts library did not load. Check the connection and reload."; return; }
     Chart.defaults.font.family = '"IBM Plex Mono", ui-monospace, monospace';
     Chart.defaults.font.size = 11;
+    registerHover(Chart);
     const unit = getUnit();
     const t1 = now(), t0 = t1 - range.ms;
     const grp = GROUPS.find((x) => x.id === activeGroup);
     for (const c of grp.charts) {
       const card = document.querySelector(`[data-chart="${c.id}"]`);
       const unitLabel = c.unit === "temp" ? `°${unit}` : c.unit;
-      const data = c.series.map((s) => datasetPoints({ ...s, unit: c.unit }, unit, t0));
+      const width = card.querySelector(".chart-box").clientWidth || 600;
+      const data = c.series.map((s) => datasetPoints({ ...s, unit: c.unit }, unit, t0, width));
       const empty = data.every((d) => d.every((p) => p.y === null));
       card.querySelector("[data-note]").textContent = empty ? "No readings in this range" : c.note ?? "";
 
@@ -185,12 +233,15 @@ export function createGraphs({ config, now, getUnit, onError }) {
       data: {
         datasets: c.series.map((s) => ({
           label: s.label, data: [], borderColor: s.color, backgroundColor: s.color,
-          borderWidth: s.width ?? 1.6, pointRadius: 0, pointHitRadius: 6, spanGaps: false, tension: 0,
+          borderWidth: s.width ?? 1.6, pointRadius: 0, pointHoverRadius: 3.5, pointHoverBorderWidth: 0,
+          spanGaps: false, tension: 0,
         })),
       },
+      plugins: [crosshair],
       options: {
-        animation: false, parsing: false, normalized: true, responsive: true, maintainAspectRatio: false,
-        interaction: { mode: "nearest", axis: "x", intersect: false },
+        // Data redraws are instant; only the tooltip glides between readings.
+        animation: { duration: 0 }, parsing: false, normalized: true, responsive: true, maintainAspectRatio: false,
+        interaction: { mode: "timeEach", intersect: false },
         scales: {
           x: { type: "linear", ticks: { callback: tick, maxTicksLimit: 6, color: C.muted }, grid: { color: C.line } },
           y: { title: { display: true, text: "", color: C.muted }, ticks: { color: C.muted }, grid: { color: C.line } },
@@ -198,6 +249,9 @@ export function createGraphs({ config, now, getUnit, onError }) {
         plugins: {
           legend: { display: c.series.length > 1, labels: { color: C.muted, boxWidth: 12, boxHeight: 2 } },
           tooltip: {
+            animation: { duration: 140, easing: "easeOutQuad" },
+            position: "average",
+            caretPadding: 10,
             callbacks: {
               title: (items) => `${fmtClock(new Date(items[0].parsed.x))} local, ${fmtClock(new Date(items[0].parsed.x), true)} UTC`,
               label: (item) => `${item.dataset.label}: ${item.parsed.y.toFixed(digits)} ${item.chart.$unit}`,

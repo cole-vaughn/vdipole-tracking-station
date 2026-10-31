@@ -47,7 +47,6 @@ function noteError(text) {
 }
 
 // ---------- Status bar, banner, diagnostics (every second, even with no new data) ----------
-const LABELS = { live: "Live", delayed: "Delayed", offline: "Offline", nodata: "No data" };
 
 function wifiText(rssi) {
   if (!isNum(rssi) || rssi === 0) return "--";
@@ -80,10 +79,7 @@ function bannerFor(f) {
 let lastBannerText = "";
 function tick() {
   const f = freshness(app.latest?.ts, Date.now(), app.offsetMs, CONFIG.freshness);
-  const status = $("status");
-  status.dataset.state = f.state;
-  setText("status-label", LABELS[f.state]);
-  document.body.dataset.station = f.state;
+  document.body.dataset.station = f.state; // drives the dimmed look while offline
   setText("age", f.ageMs === null ? "--" : fmtAge(f.ageMs));
   setText("uptime", fmtUptime(app.latest?.uptimeS));
   setText("wifi", wifiText(app.latest?.rssi));

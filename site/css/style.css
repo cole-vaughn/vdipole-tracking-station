@@ -91,28 +91,6 @@ dd, .big, .num, .smeter text, .readouts dd {
 .brand-mark path { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 .brand-mark circle { fill: var(--amber); }
 
-.status {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 32px;
-  padding: 0 12px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-size: 0.9rem;
-}
-.status-icon { width: 12px; height: 12px; border-radius: 50%; border: 2px solid currentColor; }
-.status[data-state="live"] { color: var(--good); }
-.status[data-state="live"] .status-icon { background: currentColor; box-shadow: 0 0 8px currentColor; }
-.status[data-state="delayed"] { color: var(--amber); }
-.status[data-state="delayed"] .status-icon { background: linear-gradient(90deg, currentColor 50%, transparent 50%); }
-.status[data-state="offline"] { color: var(--bad); }
-.status[data-state="nodata"] { color: var(--muted); }
-.status[data-state="nodata"] .status-icon { border-radius: 2px; height: 3px; border-width: 1px; background: currentColor; }
-
 .meta { display: flex; flex-wrap: wrap; gap: 4px 18px; }
 .meta div { display: flex; flex-direction: column; }
 .meta dt { color: var(--muted); font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; }
@@ -321,7 +299,7 @@ body[data-station="nodata"] .grid .panel:not(.globe-panel) { opacity: 0.6; filte
 
 /* ---------- Phones ---------- */
 @media (max-width: 699px) {
-  .statusbar { padding: 8px 12px; gap: 8px 12px; }
+  .statusbar { position: static; padding: 8px 12px; gap: 8px 12px; } /* scrolls away on phones */
   .brand h1 { font-size: 1rem; }
   .meta { gap: 4px 14px; width: 100%; }
   .grid { padding: 12px; }
