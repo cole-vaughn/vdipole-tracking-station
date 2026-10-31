@@ -138,4 +138,5 @@ test("screenshots for review @screens", async ({ page }, info) => {
   await open(page, ""); // autoplay on, so the status reads LIVE
   await page.waitForTimeout(8000); // globe imagery
   await page.screenshot({ path: `tests/screenshots/${info.project.name}.png`, fullPage: true });
+  await page.screenshot({ path: `tests/screenshots/${info.project.name}-first-view.png` });
 });
