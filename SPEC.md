@@ -35,7 +35,7 @@ Success criteria (from the draft, unchanged):
 | D2 | Firebase is not set up yet. Cole creates the project, database and the one ESP32 user using the firmware README steps. | The agent cannot create the account. | Q1 |
 | D3 | New repo, public. The v1 repo is not reused. The agent commits locally only. Cole creates the remote, pushes, and enables Pages. | Clean history. v1 only ever held the HTML file, but a fresh start is simpler. | Q2 |
 | D4 | Plain static files with pinned CDN libraries. No build tool. | Matches v1, no deploy step, easy to explain. | Q3 |
-| D5 | Globe imagery is the Natural Earth set bundled with CesiumJS. No Cesium ion token, no account. Explicitly turn off every default that calls ion. | No token, no policy risk. Low detail is accepted. | Q4 |
+| D5 | Globe (changed 2026-10-31, option A of three prototypes): three.js through globe.gl with NASA Blue Marble by day and NASA Earth at Night by night, blended along the real sunrise line. No token, no account. Replaces Cesium, which looked soft (half-resolution rendering) and glitchy. | Cole picked it after comparing three working prototypes. | Q4, revised |
 | D6 | Charging state is inferred, never read. See section 7, F2. It is shown as "Charging (inferred)" with a hysteresis band so small spikes do not flip it. | Cole asked for an intelligent inference. The sensor probably cannot see charge current. | Q5 |
 | D7 | Freshness: LIVE under 6 s, DELAYED 6 to 30 s, OFFLINE over 30 s. All in config. | Station writes every 2 s. | Q6 |
 | D8 | Temperature has a C/F toggle. Times show in the viewer's local time and UTC. Data is stored in UTC and Celsius. | Friendlier for US viewers. | Q7 |
@@ -49,6 +49,8 @@ Success criteria (from the draft, unchanged):
 | D16 | The project's old name is not used anywhere in the repo, site or docs. Page title: "Satellite V-Dipole Tracking Station". No logo. No university or course branding unless Cole asks later. | Cole's choice. | Q15 |
 | D17 | Defaults for Q16, accepted unless Cole objects: sound off (there is none), reduced-motion respected (no ring pulses, blade spin, globe auto-motion), status never by color alone. | Draft proposal. | Q16 |
 | D18 | Google Photorealistic 3D Tiles are out of v1. | Needs a restricted, budget-capped key. | Q17 |
+| D19 | The satellite is an illustrative 3D model (gold bus, two solar wings, Earth-facing antenna), drawn about 500 km across and labeled as not to scale. | Cole asked for a model instead of a dot; no exact public model exists. | Review |
+| D20 | No LIVE/DELAYED/OFFLINE pill. Freshness shows as data age, the offline banner and dimmed cards. The header is not sticky on phones. | Cole's request. | Review |
 
 ## 3. The station and its data
 
@@ -150,7 +152,7 @@ Priority order: look and feel, live data and freshness, battery widget, globe wi
 
 **F0 Look and feel.** Mission-control dark. Starting tokens (change freely): background #0a0e14, panels #111823, lines #1f2b3a, text #d6e2f0, muted #7d8fa3, accent cyan #4fd1ff, amber #ffb454, good #5ee09a, bad #ff5c6a. Monospace tabular numerals for readings. Mobile first to 360 px, 44 px touch targets, reduced motion respected, never color alone. Local time and UTC. A C/F toggle remembered in localStorage (wrapped in try/catch).
 
-**F1 Connection and freshness bar.** Always visible: LIVE, DELAYED or OFFLINE, data age, uptime, WiFi, last seen. OFFLINE shows a banner within 1 s of the threshold, dims cards, keeps last values and graphs. The age counter ticks every second on its own. Handles browser network loss, stream errors and reconnects, and clears itself on reconnect.
+**F1 Connection and freshness bar.** Always visible (sticky on wide screens): data age, uptime, WiFi, last seen (no status pill, D20). OFFLINE shows a banner within 1 s of the threshold, dims cards, keeps last values and graphs. The age counter ticks every second on its own. Handles browser network loss, stream errors and reconnects, and clears itself on reconnect.
 
 **F2 Battery widget.** Rounded outline with a nub, fill follows battSocPct, number beside it, "~Xh Ym left" ("--" when null). Colors per D15. Second line: V, mA, mW, Wh left. Labeled as an estimate. Low warning below 20% or under 9.5 V. Charging state per D6:
 
@@ -161,7 +163,7 @@ Priority order: look and feel, live data and freshness, battery widget, globe wi
 - If the fit is not reliable, the badge is dropped. Unreliable charging claims are worse than none.
 - Renders correctly at 100, 80, 50, 35, 20, 5, 0 percent and with null, no layout shift.
 
-**F3 Globe (CesiumJS, pinned version).** Bundled Natural Earth imagery, no ion calls, no console errors from default ion requests. Station marker from config. Meteor-M2-4 position from satellite.js (SGP4) at about 1 Hz from `data/gp.json`. Ground track, optional footprint, line to the satellite when above the horizon with azimuth, elevation, range. Orbit-data age shown, warning past about 7 days. A missing or very old file shows "orbit data unavailable", never a wrong satellite. Follow and reset buttons. Pause when hidden. Lighter mode on phones. Lazy-load Cesium. Satellites come from a config list even though v1 shows one.
+**F3 Globe (three.js via globe.gl, pinned).** NASA Blue Marble and Earth at Night textures with real day and night shading. Station marker from config. Meteor-M2-4 as an illustrative 3D model (D19), position from satellite.js (SGP4) recomputed 10 times a second from `data/gp.json`. Past and upcoming ground track, a beam to the satellite when it is above the horizon, with azimuth, elevation and range. Orbit-data age shown, warning past about 7 days. A missing or very old file shows "orbit data unavailable", never a wrong satellite. Follow and reset buttons. Pauses when the tab is hidden. Lower pixel ratio on phones. Loads after the first paint. Satellites come from a config list even though v1 shows one.
 
 **F3b Next pass.** One line "next pass in HH:MM" (and maximum elevation), computed by stepping SGP4 forward over the next day. Hidden if the orbit data is unavailable.
 
@@ -227,7 +229,7 @@ These come from reading the draft PDF and the firmware side by side. Cole reacts
 
 A1. **Public read of the whole `/station` node is a quota risk.** The firmware README rules set `.read: true` on `/station`, which also exposes all of `history`. Anyone could download it in a loop. At about 4 MB per full pull, roughly 2,500 pulls would use the 10 GB monthly download limit. Fix: the stricter rules in section 5 (live nodes open, history only through a limited, indexed query). This needs Cole's approval since it changes database rules.
 
-A2. **Cesium defaults call Cesium ion.** A default Viewer asks ion for imagery, which needs a token and logs errors, and that conflicts with "no console errors" and "no token". The viewer must be built with its own bundled imagery and the ion-backed widgets turned off. Loading Cesium from a CDN also needs its base URL set so the bundled imagery and workers are found. Verify in M5.
+A2. **(Resolved by D5: Cesium removed.)** Cesium defaults call Cesium ion. A default Viewer asks ion for imagery, which needs a token and logs errors, and that conflicts with "no console errors" and "no token". The viewer must be built with its own bundled imagery and the ion-backed widgets turned off. Loading Cesium from a CDN also needs its base URL set so the bundled imagery and workers are found. Verify in M5.
 
 A3. **Record size is probably larger than 420 bytes.** Counting the 25 key names plus values in the firmware's JSON builder gives roughly 500 to 560 bytes. Storage and download math scales with it. Measure one real record on first data and update section 5. A slimmer history record (fewer fields) is a possible firmware change.
 
