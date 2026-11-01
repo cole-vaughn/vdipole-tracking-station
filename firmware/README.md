@@ -1,20 +1,22 @@
-# Station firmware 1.0
+# Station firmware 1.1
 
 Single-sketch firmware for the Satellite V-Dipole Tracking Station (ESP32 DOIT DevKit V1, ELEE 4230/6230).
 It reads every sensor, drives the LCD, and uploads to Firebase Realtime Database.
 
-**Status: compiles cleanly (2026-10-31), NOT yet run on hardware.** Walk through the test checklist at the bottom. Nothing here has been measured on the
-finished enclosure, so every value marked `PLACEHOLDER` in the sketch is a guess until it is measured.
+**Status: version 1.1 compiles cleanly (2026-11-01) and has not run on the station yet.** Walk through the test checklist
+at the bottom. Nothing here has been measured on the finished enclosure, so every value marked `PLACEHOLDER` in the
+sketch or in `soh.h` is a guess until it is measured.
 
-**Planned for 1.1, not built yet:** a battery state of health (SOH) estimator. Everything below marked "(1.1, planned)"
-follows `SPEC.md` section 14 and waits for Cole's approval.
+**New in 1.1:** battery state of health (SOH) learned from normal use, and INA219 averaging. The design is `SPEC.md`
+section 14. The logic in `soh.h` is tested on a PC with a simulated pack (`npm run test:firmware`, 137 checks); the
+sketch around it has only been compiled.
 
 ## Files
 
 | File | Purpose |
 |---|---|
 | `station_firmware/station_firmware.ino` | The whole firmware. Open this folder in the Arduino IDE (the folder name must match the sketch name). |
-| `station_firmware/soh.h` | (1.1, planned) Battery health logic as plain C++ with no Arduino headers, so the same file is unit-tested on a PC. |
+| `station_firmware/soh.h` | Battery health logic as plain C++ with no Arduino headers, so the same file is tested on a PC (`tests/firmware/`). It also holds the voltage table the battery estimate uses. |
 | `station_firmware/secrets.example.h` | Template for credentials. Copy to `secrets.h` in the same folder and fill in. |
 | `.gitignore` | Keeps `secrets.h` and build output out of git. |
 | `README.md` | This file. |
@@ -29,10 +31,10 @@ and regenerate the ThingSpeak write key.
 - Libraries (Library Manager): Adafruit BMP3XX, Adafruit INA219 (accept the BusIO and Unified Sensor dependencies).
 - Built in: Wire, LiquidCrystal, WiFi, WiFiClientSecure, HTTPClient, Preferences.
 - Serial Monitor: 115200 baud.
-- Verified build (2026-10-31): arduino-esp32 core 3.3.12, Adafruit BMP3XX 2.1.6, Adafruit INA219 1.2.3,
+- Verified build (2026-11-01, version 1.1): arduino-esp32 core 3.3.12, Adafruit BMP3XX 2.1.6, Adafruit INA219 1.2.3,
   Adafruit BusIO 1.17.4, Adafruit Unified Sensor 1.1.15, LiquidCrystal 1.0.7. Board "DOIT ESP32 DEVKIT V1".
-  Result: 1,091,180 bytes of flash (83%), 51,736 bytes of RAM (15%). The only warnings are inside the Adafruit INA219
-  library itself.
+  Result: 1,112,128 bytes of flash (84%), 55,424 bytes of RAM (16%). With all warnings on, the sketch and `soh.h` give
+  none; the only warnings are inside the Adafruit INA219 library itself.
 - Command-line build (optional): `arduino-cli compile --fqbn esp32:esp32:esp32doit-devkit-v1 firmware/station_firmware`
   (needs `secrets.h` in that folder). If arduino-cli says `LiquidCrystal.h` is missing, run
   `arduino-cli lib install "LiquidCrystal"`; the Arduino IDE already includes it.
@@ -89,15 +91,20 @@ touched to 3.3 V. So the tach never drives the line high by itself: it is open c
 - **Every 100 ms:** capacitive sensor. A confirmed press increments the counter and advances the LCD page. A press or
   release triggers an immediate write to `/station/touch`.
 - **Upload task (core 0, 16 KB stack):** signs in to Firebase Auth, then writes `/station/latest` every 2 s,
-  `/station/history` every 10 s, `/station/touch` on a press or release, and `/station/meta` once per boot. The
+  `/station/history` every 10 s, `/station/touch` on a press or release, `/station/meta` once per boot,
+  `/station/health` at most once a minute when it changed, and a `/station/healthLog` record when a slice closes
+  (retried every 10 s until it is sent; the flag is saved, so a restart does not send it twice). The
   capacitive timing runs on core 1 with interrupts off, so WiFi and TLS work cannot disturb it.
 - **Battery:** energy counting in watt-hours against 26.6 Wh x 0.90, a voltage-based correction used only near full and
   near empty, a smoothed power average for the time left, and the remaining energy saved to flash every 5 minutes.
-- **INA219 averaging (1.1, planned):** the chip averages 128 samples per reading, the sketch reads it every 100 ms and
-  averages each 2 s window, so random WiFi bursts no longer look like current noise.
-- **Battery health (1.1, planned):** learns from normal use, no special procedure. Each discharge is one "slice"
-  (energy used versus how far the voltage moved); a weighted total least squares fit over the last 32 slices gives an
-  SOH score with a plus-or-minus. Written to `/station/health` and `/station/healthLog`. See `SPEC.md` section 14.
+- **INA219 averaging:** the chip averages 128 samples per reading, the sketch reads it every 100 ms and averages each
+  2 s window, so random WiFi bursts no longer look like current noise. The library has no call for this, so the sketch
+  writes the config register itself, and checks it every 2 s in case a sharp load reset the chip (`h` shows the count).
+- **Battery health:** learns from normal use, no special procedure. Each discharge is one "slice" (energy used versus
+  how far the voltage moved); a weighted total least squares fit over the last 32 slices gives an SOH score with a
+  plus-or-minus. Temperature comes from the BMP388 (`SOH_TEMP_FROM_THERMISTOR 1` switches to the thermistor once it is
+  verified). Written to `/station/health` and `/station/healthLog`. The Serial print every 2 s has a `Health` line.
+  See `SPEC.md` section 14.
 - **BMP388 missing:** not fatal. The sketch keeps running and the BMP388 fields are sent as `null`.
 
 ### LCD pages (a capacitive press goes to the next page)
@@ -123,8 +130,8 @@ touched to 3.3 V. So the tach never drives the line high by itself: it is open c
 | `f` | Battery is full now (use right after a full charge) |
 | `r` | Reset the peak current |
 | `x` | Clear the saved battery value (reboot to restart from the voltage reading) |
-| `h` | (1.1, planned) Print battery health debug: fit result, stored slices, the open slice, failing anchor checks |
-| `z` | (1.1, planned) Reset all battery health state. Type `y` within 10 s to confirm; anything else cancels |
+| `h` | Battery health report: fit result, stored slices, the open slice, which anchor check fails right now |
+| `z` | Reset all battery health state (for a new pack). Type `y` within 10 s to confirm; anything else cancels |
 
 ## Firebase setup (Spark plan, no card needed)
 
@@ -144,6 +151,11 @@ touched to 3.3 V. So the tach never drives the line high by itself: it is open c
       "meta":   { ".read": true },
       "history": {
         ".read": "query.orderByChild == 'ts' && query.limitToLast <= 9000",
+        ".indexOn": ["ts"]
+      },
+      "health": { ".read": true },
+      "healthLog": {
+        ".read": "query.orderByChild == 'ts' && query.limitToLast <= 500",
         ".indexOn": ["ts"]
       },
       ".write": "auth != null && auth.token.email == 'esp32@example.com'"
@@ -194,7 +206,7 @@ Other paths:
 - `/station/touch`: `{ state, count, ts }`, written the moment the press state changes.
 - `/station/meta`: `{ fw, bootTs }`, once per boot.
 
-### Battery health nodes (1.1, planned; layout approved by Cole)
+### Battery health nodes (layout approved by Cole)
 
 `/station/health`, overwritten at most once a minute when something changed and right after a slice closes:
 
@@ -207,13 +219,14 @@ Other paths:
 | `battCapWhEst` | Wh or null | Fitted usable energy |
 | `battCycles` | count | Equivalent full cycles (discharged Wh / 26.6) |
 | `battSohSlices` | count | Slices in the fit |
-| `battSohProgressPct` | % | Progress of the open slice toward being usable; 100 once usable |
+| `battSohProgressPct` | % | Progress of the open slice toward being usable; 100 once usable. The first half fills during the 60 min settle time, the second as the slice grows |
 | `battSohLearn` | text | `waiting`, `discharging`, or `charging` |
 | `inaCal` | bool | False while the INA219 gain and offset are placeholders |
 
 `/station/healthLog/<pushId>`, one record per closed slice, accepted or rejected: `ts`, `ok`, `why` (reason when
 rejected or an outlier), `start` (`full` or `rest`), `e` (Wh), `ah`, `x` (energy-percent points), `sx` (its
-uncertainty), `sliceSohPct`, `fitSohPct`, `fitSigmaPct`, `tempC`, `hours`.
+uncertainty), `sliceSohPct`, `fitSohPct`, `fitSigmaPct`, `tempC`, `hours`. A `z` reset adds one record with `why`
+"reset" and no values. The full list of `why` texts is in `SPEC.md` section 14.12.
 
 ### Flash (Preferences) keys
 
@@ -222,9 +235,9 @@ All in the namespace `station`. Keys are at most 15 characters (an NVS limit).
 | Key | Type | Holds | Written |
 |---|---|---|---|
 | `remWh` | float | Energy left for the battery estimate | every 5 min if it moved 0.05 Wh |
-| `sohState` | blob (1.1, planned) | Fit result, cycle energy, last slice result | when a slice closes; otherwise at most every 5 min, only on a real change |
-| `sohSlices` | blob (1.1, planned) | The last 32 accepted slices (about 600 bytes) | when a slice closes |
-| `sohOpen` | blob (1.1, planned) | The slice in progress and its best end point, so a reboot does not lose it | at most every 5 min during a discharge |
+| `sohState` | blob, about 57 bytes | Cycle energy, recent outliers, the last slice result and whether it was sent (the fit is recomputed from the slices) | when a slice closes or its record is sent; otherwise at most every 30 min if the cycle energy moved |
+| `sohSlices` | blob, up to 550 bytes | The last 32 accepted slices | when a slice closes |
+| `sohOpen` | blob, about 140 bytes | The slice in progress and its best end point, so a reboot does not lose it | when its start point is found, then at most every 5 min |
 
 Each blob carries a version byte and a CRC, so an old or corrupt value resets cleanly. `z` clears all three.
 
@@ -234,7 +247,7 @@ Each blob carries a version byte and a CRC, so an old or corrupt value resets cl
 |---|---|
 | History growth | about 3.8 MB per day (one record per 10 s), so the 1 GB Spark limit lasts about 262 days |
 | Live listener | about 18 MB per day per browser tab left open, about 0.54 GB per month |
-| Battery health (planned, separate nodes) | about 0.01 MB per day stored; at most 0.33 MB per day per open tab |
+| Battery health (separate nodes) | about 0.01 MB per day stored; at most 0.33 MB per day per open tab |
 | Spark limits | 100 simultaneous connections, 1 GB stored, 10 GB per month downloaded |
 
 The history grows without bound. The website reads at most 24 h of it (an `orderByChild("ts")` query with
@@ -249,13 +262,13 @@ Search the sketch for `PLACEHOLDER`. The important ones:
 |---|---|
 | `MUX_RDS_ON_OHMS`, `MUX_GAIN_T_MEASURED`, `MUX_GAIN_R_MEASURED` | Run `m`, compare each pin voltage to a multimeter at the sensor outputs |
 | `BATT_USABLE_FRACTION` (0.90), `BATT_R_INT_OHM` (0.25) | Check after a full discharge cycle |
-| `INA219_CURRENT_GAIN`, `INA219_CURRENT_OFFSET_MA` | Two-point calibration against a reference meter in series |
+| `INA219_CURRENT_GAIN`, `INA219_CURRENT_OFFSET_MA` | Two-point calibration against a reference meter in series, then set `INA219_CALIBRATED` to 1 |
 | `CAP_VS`, `CAP_VREF`, `CAP_T_COMP_US` | Measure the GPIO high level and CAP_REF with a meter |
 | `CAP_TD_OFFSET_US`, `CAP_PF_SLOPE_CAL`, `CAP_PF_OFFSET_CAL` | Fit with known test capacitors (so `capPF` becomes meaningful) |
 | `CAP_PRESS_DELTA_US` (27), `CAP_RELEASE_DELTA_US` (18) | Re-tune with `b` and `s` after the enclosure, longer wires and foil pad are in |
 | `BMP388_CALIBRATION_OFFSET` (96.2) | CP3-era offset between the thermistor and the BMP388. Re-check with the mux in the path |
-| (1.1, planned) `SOH_TABLE_SIGMA_MV` (15), `SOH_RINT_SIGMA_OHM` (0.1), `SOH_E_SIGMA_PCT` (2), `SOH_FLOOR_PCT` (3) | Uncertainties used to weigh each slice and the floor for the generic voltage table. Revisit after the INA219 calibration and a few charge cycles |
-| (1.1, planned) `SOH_FULL_V` (12.54), `SOH_CUTOFF_V` (9.5) | Full detection (charger full voltage) and the low end anchor. Check against the real charger and pack |
+| In `soh.h`: `SOH_TABLE_SIGMA_MV` (15), `SOH_RINT_SIGMA_OHM` (0.1), `SOH_E_SIGMA_PCT` (2), `SOH_E_SIGMA_WH` (0.02), `SOH_FLOOR_PCT` (3) | Uncertainties used to weigh each slice and the floor for the generic voltage table. Revisit after the INA219 calibration and a few charge cycles |
+| In `soh.h`: `SOH_FULL_V` (12.54), `SOH_FULL_HOLD_S` (1200), `SOH_CUTOFF_V` (9.5), `SOH_R_INT_OHM` (0.25, also used by the battery estimate) | Full detection (charger full voltage, held 20 min) and the low end anchor. Check against the real charger and pack |
 
 The INA219 gain and offset matter most for battery health: every watt-hour scales with the gain. Until they are
 measured, the website marks the health numbers "uncalibrated".
@@ -276,7 +289,8 @@ The old CP4 report numbers were mock values. Do not present any of them as acqui
   -75 dBm without a signal. Anything that visualizes "signal" should use dB above a rolling baseline.
 - **SAWbird 5 V supply** is the last open hardware task: Cole plans to power it from a stripped USB-C cable, then check
   the RF chain with a NanoVNA. Until then the RF reading stays flat.
-- **Not run on hardware.** It compiles (see the top of this file), but nothing has been checked on the board yet.
+- **Version 1.1 not run on hardware.** It compiles (see the top of this file). The battery health logic is tested on a
+  PC with a simulated pack; the sketch around it (INA219 averaging, flash, uploads, `h`, `z`) has not run on the board.
 
 ## First-run test checklist
 
@@ -292,6 +306,6 @@ The old CP4 report numbers were mock values. Do not present any of them as acqui
    about 1,050 to 1,110 RPM on the 12 V battery, about 650 RPM on laptop USB power (USB is only used while flashing).
 8. Pull the WiFi for a minute and plug it back in: uploads must resume without a reboot.
 9. Leave it running for an hour: sign-in refreshes around the 50 minute mark without a gap in `/station/latest`.
-10. (1.1, planned) Battery health, after the INA219 calibration: use the station normally for a few charge cycles and
-    check that `/station/healthLog` gets one record per discharge. Also plug the charger in mid-discharge, and power-cycle
-    mid-discharge. The full list is in `SPEC.md` section 14.18.
+10. Battery health, after the INA219 calibration: run `h` once a day. Use the station normally for a few charge cycles
+    and check that `/station/healthLog` gets one record per discharge. Also plug the charger in mid-discharge, and
+    power-cycle mid-discharge. The full list is in `SPEC.md` section 14.18.

@@ -1,14 +1,15 @@
 /*
- * Satellite V-Dipole Tracking Station: complete ESP32 firmware (version 1.0)
+ * Satellite V-Dipole Tracking Station: complete ESP32 firmware (version 1.1)
  * ELEE 4230, ESP32 DOIT DevKit V1
  *
- * Everything in one sketch:
+ * Everything in one sketch (plus soh.h):
  *   - BMP388 temperature and pressure (I2C 0x77)
  *   - Thermistor chain and RF (AD8307) chain through the shared-ADC analog mux,
  *     each with a Kalman filter
  *   - Capacitive press sensor (square wave + LM339 timing), with press counter
- *   - INA219 on the 12 V line: voltage, current, power
+ *   - INA219 on the 12 V line: voltage, current, power (128-sample averaging, read every 100 ms)
  *   - Battery estimator (energy counting + voltage check, saved to flash)
+ *   - Battery state of health from normal use (soh.h, SPEC.md section 14)
  *   - PC fan speed from the tach wire (3-pin fan)
  *   - 16x2 LCD with 7 pages (a capacitive press changes the page)
  *   - Firebase Realtime Database upload (replaces ThingSpeak), in its own task
@@ -18,10 +19,11 @@
  *
  * Setup: copy secrets.example.h to secrets.h and fill it in. See ../README.md.
  *
- * Search this file for "PLACEHOLDER" to find every value that still needs a bench measurement.
+ * Search this file and soh.h for "PLACEHOLDER" to find every value that still needs a bench measurement.
  *
- * NOTE: this version was written but NOT compiled or run on hardware. Compile it first,
- * fix anything the compiler reports, then test with the checklist in ../README.md.
+ * NOTE: version 1.1 compiles with arduino-cli (esp32 core 3.3.12) but has not run on the station yet.
+ * Test it with the checklist in ../README.md. The battery health logic in soh.h is tested on a PC
+ * (npm run test:firmware).
  */
 
 #include <Wire.h>
@@ -37,8 +39,9 @@
 #include "soc/gpio_reg.h"
 #include "soc/soc.h"
 #include "secrets.h"
+#include "soh.h"
 
-#define FW_VERSION "vdipole-fw-1.0"
+#define FW_VERSION "vdipole-fw-1.1"
 
 // Shared telemetry snapshot (loop() writes, the upload task reads). Declared up here because the Arduino IDE
 // generates function prototypes at the top of the sketch, and buildTelemetryJson() takes this type.
@@ -60,6 +63,7 @@ struct Telemetry {
 #define SEALEVELPRESSURE_HPA  (1013.25)
 #define READ_INTERVAL_MS      2000    // BMP388, mux sensors, INA219, fan, battery
 #define CAP_INTERVAL_MS       100     // capacitive sensor, fast so a press feels instant
+#define INA_SAMPLE_MS         100     // INA219 read this often; each READ_INTERVAL_MS window is averaged
 #define LCD_REFRESH_MS        250
 #define SCREEN_COUNT          7
 #define BMP388_I2C_ADDR       0x77
@@ -68,6 +72,8 @@ struct Telemetry {
 // ---------- Firebase config ----------
 #define LATEST_INTERVAL_MS    2000    // overwrites /station/latest (no storage growth)
 #define HISTORY_INTERVAL_MS   10000   // appends to /station/history (about 450 bytes per record)
+#define HEALTH_INTERVAL_MS    60000   // overwrites /station/health at most this often, only when it changed
+#define HEALTH_RETRY_MS       10000   // a /station/healthLog record that failed is retried this often
 #define TOKEN_REFRESH_MS      (50UL * 60UL * 1000UL)   // sign in again before the 1 hour token expires
 #define TOKEN_EXPIRY_MS       (58UL * 60UL * 1000UL)   // after this long the old token is treated as dead
 #define SIGNIN_MIN_GAP_MS     15000UL                  // never sign in more often than this
@@ -398,14 +404,60 @@ float inaBusV = NAN, inaShuntmV = NAN, inaCurrentmA = NAN, inaPowermW = NAN;
 // Two-point calibration against a reference meter in series with the load.
 #define INA219_CURRENT_GAIN       1.0   // PLACEHOLDER
 #define INA219_CURRENT_OFFSET_MA  0.0   // PLACEHOLDER
+#define INA219_CALIBRATED         0     // set to 1 once the two values above are measured (the website then drops "uncalibrated")
 
+// The chip averages 128 samples per reading (69 ms), so WiFi bursts no longer look like random current noise.
+// Same range and gain as setCalibration_32V_1A(); the library has no call for averaging, so this is written directly.
+const uint16_t INA219_CONFIG_AVG128 =
+    (uint16_t)INA219_CONFIG_BVOLTAGERANGE_32V | (uint16_t)INA219_CONFIG_GAIN_8_320MV |
+    (uint16_t)INA219_CONFIG_BADCRES_12BIT_128S_69MS | (uint16_t)INA219_CONFIG_SADCRES_12BIT_128S_69MS |
+    (uint16_t)INA219_CONFIG_MODE_SANDBVOLT_CONTINUOUS;
+uint32_t inaConfigRewrites = 0;       // times the chip had lost the setting (a reset from a sharp load), shown by `h`
+
+uint16_t ina219ReadConfig() {
+  Wire.beginTransmission(INA219_I2C_ADDR);
+  Wire.write(INA219_REG_CONFIG);
+  if (Wire.endTransmission() != 0 || Wire.requestFrom((uint8_t)INA219_I2C_ADDR, (uint8_t)2) != 2) return 0;
+  uint16_t hi = Wire.read();
+  return (uint16_t)((hi << 8) | Wire.read());
+}
+
+void ina219WriteConfig() {
+  Wire.beginTransmission(INA219_I2C_ADDR);
+  Wire.write(INA219_REG_CONFIG);
+  Wire.write((uint8_t)(INA219_CONFIG_AVG128 >> 8));
+  Wire.write((uint8_t)(INA219_CONFIG_AVG128 & 0xFF));
+  Wire.endTransmission();
+}
+
+// Sums for the present 2 s window, filled every INA_SAMPLE_MS.
+double inaSumBusV = 0, inaSumShuntmV = 0, inaSummA = 0, inaSummW = 0;
+uint16_t inaSumN = 0;
+
+void inaSample() {
+  if (!inaOk) return;
+  float bus   = ina219.getBusVoltage_V();                  // measured at Vin- (load side)
+  float shunt = ina219.getShuntVoltage_mV();
+  float mA    = ina219.getCurrent_mA() * INA219_CURRENT_GAIN + INA219_CURRENT_OFFSET_MA;
+  float battV = bus + shunt / 1000.0f;                     // battery side (Vin+)
+  inaSumBusV += bus;  inaSumShuntmV += shunt;  inaSummA += mA;  inaSummW += battV * mA;
+  inaSumN++;
+}
+
+// Called every READ_INTERVAL_MS: the window's averages become the readings everything else uses.
 void readINA219() {
   if (!inaOk) return;
-  inaBusV      = ina219.getBusVoltage_V();                 // measured at Vin- (load side)
-  inaShuntmV   = ina219.getShuntVoltage_mV();
-  inaCurrentmA = ina219.getCurrent_mA() * INA219_CURRENT_GAIN + INA219_CURRENT_OFFSET_MA;
-  float battV  = inaBusV + inaShuntmV / 1000.0f;           // battery side (Vin+)
-  inaPowermW   = battV * inaCurrentmA;
+  if (inaSumN == 0) inaSample();       // the very first call, before the 100 ms reads have started
+  inaBusV      = inaSumBusV / inaSumN;
+  inaShuntmV   = inaSumShuntmV / inaSumN;
+  inaCurrentmA = inaSummA / inaSumN;
+  inaPowermW   = inaSummW / inaSumN;   // mean of V x I, not mean V x mean I
+  inaSumBusV = inaSumShuntmV = inaSummA = inaSummW = 0;
+  inaSumN = 0;
+  if (ina219ReadConfig() != INA219_CONFIG_AVG128) {
+    ina219WriteConfig();
+    inaConfigRewrites++;
+  }
 }
 
 // ===================================================================
@@ -420,7 +472,7 @@ void readINA219() {
 #define BATT_CELLS              3
 #define BATT_CAP_WH_RATED       26.6f
 #define BATT_USABLE_FRACTION    0.90f   // PLACEHOLDER: derating for age and optimistic labels. 1.0 trusts the label.
-#define BATT_R_INT_OHM          0.25f   // PLACEHOLDER: pack + wiring resistance for the sag correction
+#define BATT_R_INT_OHM          ((float)SOH_R_INT_OHM)   // PLACEHOLDER (0.25, set in soh.h): pack + wiring resistance for the sag correction
 #define BATT_AVG_TAU_S          120.0f
 #define BATT_CORR_PER_S         0.001f
 #define BATT_SAVE_EVERY_S       300
@@ -429,13 +481,6 @@ void readINA219() {
 
 const float BATT_CAP_WH = BATT_CAP_WH_RATED * BATT_USABLE_FRACTION;
 
-// Typical 18650 open-circuit voltage per cell -> percent
-const float CELL_V[]   = {4.20, 4.15, 4.11, 4.08, 4.02, 3.98, 3.95, 3.91, 3.87, 3.85, 3.84,
-                          3.82, 3.80, 3.79, 3.77, 3.75, 3.73, 3.71, 3.69, 3.61, 3.30, 3.00};
-const float CELL_PCT[] = { 100,   95,   90,   85,   80,   75,   70,   65,   60,   55,   50,
-                            45,   40,   35,   30,   25,   20,   15,   10,    5,    2,    0};
-const int   CELL_TABLE_N = sizeof(CELL_V) / sizeof(CELL_V[0]);
-
 Preferences prefs;
 float battRemWh = 0, battAvgPmW = 0, battUsedWh = 0, battPeakmA = 0;
 float battLoadV = NAN, battSocPct = NAN, battHoursLeft = NAN;
@@ -443,17 +488,9 @@ bool  battAvgInit = false;
 float battLastSavedWh = -1;
 unsigned long battLastSaveMs = 0, battLastUpdateMs = 0;
 
+// Typical 18650 open-circuit voltage per cell -> percent. The table lives in soh.h, shared with battery health.
 float socFromVoltage(float packV) {
-  float v = packV / BATT_CELLS;
-  if (v >= CELL_V[0]) return 100;
-  if (v <= CELL_V[CELL_TABLE_N - 1]) return 0;
-  for (int i = 0; i < CELL_TABLE_N - 1; i++) {
-    if (v >= CELL_V[i + 1]) {
-      float f = (v - CELL_V[i + 1]) / (CELL_V[i] - CELL_V[i + 1]);
-      return CELL_PCT[i + 1] + f * (CELL_PCT[i] - CELL_PCT[i + 1]);
-    }
-  }
-  return 0;
+  return soh::socFromCellV(packV / BATT_CELLS);
 }
 
 void battSave() {
@@ -587,6 +624,106 @@ void refreshTouchTelemetry() {
 }
 
 // ===================================================================
+// BATTERY HEALTH (soh.h, SPEC.md section 14)
+// ===================================================================
+// soh.h does the work and is tested on a PC. This part feeds it the 2 s averages, keeps its blobs in flash,
+// and hands the two Firebase records to the upload task.
+#define SOH_TEMP_FROM_THERMISTOR  0   // 0: BMP388 box air (the default). 1: the thermistor, once it is verified.
+
+soh::Estimator sohEst;
+unsigned long sohLastMs = 0;
+uint32_t sohSeenResults = 0;
+unsigned long sohResetAskMs = 0;      // when `z` asked for confirmation (0: not asking)
+uint8_t sohBlob[soh::kBlobMax];
+
+// Shared with the upload task, under telMutex.
+char healthJsonBuf[320] = "";
+uint32_t healthSeq = 0;               // goes up whenever the /station/health record changes
+char healthLogBuf[320] = "";
+uint32_t healthLogSeq = 0;            // goes up when a new /station/healthLog record is waiting
+volatile uint32_t healthLogSentSeq = 0;   // set by the upload task after a successful POST
+volatile bool healthUrgent = true;        // send /station/health soon (after a start or a closed slice)
+
+void sohPutBlob(const char* key, size_t n) {
+  if (n) prefs.putBytes(key, sohBlob, n);
+}
+
+// Write whatever soh.h asked to save. Remove first: closing a slice and starting one never share a step,
+// but the order keeps the newest open slice if they ever did.
+void sohSave() {
+  uint8_t f = sohEst.takeSaves();
+  if ((f & soh::REMOVE_OPEN) && prefs.isKey("sohOpen")) prefs.remove("sohOpen");
+  if (f & soh::SAVE_SLICES) sohPutBlob("sohSlices", sohEst.saveSlices(sohBlob, sizeof sohBlob));
+  if (f & soh::SAVE_STATE)  sohPutBlob("sohState", sohEst.saveState(sohBlob, sizeof sohBlob));
+  if (f & soh::SAVE_OPEN)   sohPutBlob("sohOpen", sohEst.saveOpen(sohBlob, sizeof sohBlob));
+}
+
+size_t sohReadBlob(const char* key) {
+  if (!prefs.isKey(key)) return 0;     // normal on the first start
+  return prefs.getBytes(key, sohBlob, sizeof sohBlob);
+}
+
+void sohQueueLog() {
+  char buf[320];
+  if (soh::resultJson(sohEst.result, buf, sizeof buf) < 0) return;
+  xSemaphoreTake(telMutex, portMAX_DELAY);
+  strcpy(healthLogBuf, buf);
+  healthLogSeq++;
+  xSemaphoreGive(telMutex);
+}
+
+void sohRefreshHealth() {
+  char buf[320];
+  if (soh::healthJson(sohEst.status(), INA219_CALIBRATED, buf, sizeof buf) < 0) return;
+  xSemaphoreTake(telMutex, portMAX_DELAY);
+  if (strcmp(buf, healthJsonBuf) != 0) {
+    strcpy(healthJsonBuf, buf);
+    healthSeq++;
+  }
+  xSemaphoreGive(telMutex);
+}
+
+// After batteryInit() (Preferences is open). A corrupt blob resets only its own part.
+void sohInit() {
+  size_t n = sohReadBlob("sohSlices");
+  if (n && !sohEst.loadSlices(sohBlob, n)) Serial.println(F("Battery health: saved slices unreadable, starting them fresh."));
+  n = sohReadBlob("sohState");
+  if (n && !sohEst.loadState(sohBlob, n)) Serial.println(F("Battery health: saved state unreadable, starting it fresh."));
+  n = sohReadBlob("sohOpen");
+  if (n) sohEst.loadOpen(sohBlob, n);  // a start ends the slice that was open, at its last saved end point
+  sohSave();
+  if (sohEst.resultPending) sohQueueLog();   // closed just now, or never reached Firebase before the restart
+  sohSeenResults = sohEst.resultCount;
+  sohRefreshHealth();
+  soh::Status st = sohEst.status();
+  Serial.print(F("Battery health: "));
+  Serial.print(st.slices); Serial.print(F(" slices, "));
+  if (st.conf == soh::CONF_NONE) Serial.println(F("no estimate yet."));
+  else { Serial.print(F("SOH ")); Serial.print(st.sohPct, 1); Serial.print(F("% +-")); Serial.println(st.sigmaPct, 1); }
+}
+
+// Every READ_INTERVAL_MS, after readINA219() and batteryUpdate().
+void sohUpdate() {
+  unsigned long now = millis();
+  soh::Sample s;
+  s.dtS   = sohLastMs ? (now - sohLastMs) / 1000.0f : READ_INTERVAL_MS / 1000.0f;
+  s.battV = inaOk ? inaBusV + inaShuntmV / 1000.0f : NAN;
+  s.mA    = inaOk ? inaCurrentmA : NAN;
+  s.mW    = inaOk ? inaPowermW : NAN;
+  s.tempC = SOH_TEMP_FROM_THERMISTOR ? thermFiltered : tempC;   // NaN when the BMP388 is missing
+  sohLastMs = now;
+  sohEst.step(s);
+
+  if (sohEst.resultCount != sohSeenResults) {       // a slice closed, or `z`: queue its log record
+    sohSeenResults = sohEst.resultCount;
+    sohQueueLog();
+  }
+  if (sohEst.resultPending && healthLogSeq != 0 && healthLogSentSeq == healthLogSeq) sohEst.markPosted();
+  sohSave();
+  sohRefreshHealth();
+}
+
+// ===================================================================
 // FIREBASE (runs in its own task on core 0, so TLS never disturbs the cap timing on core 1)
 // ===================================================================
 // Data layout (see ../README.md):
@@ -594,6 +731,8 @@ void refreshTouchTelemetry() {
 //   /station/history  one record appended every HISTORY_INTERVAL_MS (push id keys)
 //   /station/touch    written at once when the press state changes
 //   /station/meta     written once per boot
+//   /station/health     battery health summary, at most once a minute when it changed
+//   /station/healthLog  one record per closed discharge slice (push id keys)
 WiFiClientSecure authClient;
 WiFiClientSecure dbClient;
 String fbIdToken;
@@ -699,7 +838,8 @@ int fbSend(const char* method, const char* path, const String& json) {
 }
 
 void uploadTask(void* arg) {
-  unsigned long lastLatest = 0, lastHistory = 0, lastSignInTry = 0;
+  unsigned long lastLatest = 0, lastHistory = 0, lastSignInTry = 0, lastHealth = 0, lastLogTry = 0;
+  uint32_t healthSentSeq = 0;
   bool metaSent = false;
   for (;;) {
     if (WiFi.status() != WL_CONNECTED) {
@@ -750,6 +890,31 @@ void uploadTask(void* arg) {
       lastHistory = now;
       fbSend("POST", "/station/history", buildTelemetryJson(t));
     }
+
+    // Battery health: a waiting log record first (it changes the fit), then the summary.
+    if (healthLogSeq != healthLogSentSeq && (lastLogTry == 0 || now - lastLogTry >= HEALTH_RETRY_MS)) {
+      lastLogTry = now;
+      xSemaphoreTake(telMutex, portMAX_DELAY);
+      String rec = healthLogBuf;
+      uint32_t seq = healthLogSeq;
+      xSemaphoreGive(telMutex);
+      if (fbSend("POST", "/station/healthLog", rec) == 200) {
+        healthLogSentSeq = seq;
+        healthUrgent = true;
+      }
+    }
+    if (healthSeq != healthSentSeq &&
+        ((healthUrgent && now - lastHealth >= HEALTH_RETRY_MS) || now - lastHealth >= HEALTH_INTERVAL_MS)) {
+      lastHealth = now;
+      xSemaphoreTake(telMutex, portMAX_DELAY);
+      String rec = healthJsonBuf;
+      uint32_t seq = healthSeq;
+      xSemaphoreGive(telMutex);
+      if (fbSend("PUT", "/station/health", rec) == 200) {
+        healthSentSeq = seq;
+        healthUrgent = false;
+      }
+    }
     vTaskDelay(50 / portTICK_PERIOD_MS);
   }
 }
@@ -757,7 +922,7 @@ void uploadTask(void* arg) {
 // ===================================================================
 // LCD AND SERIAL
 // ===================================================================
-unsigned long lastRead = 0, lastCap = 0, lastLcd = 0, lastWifiTry = 0;
+unsigned long lastRead = 0, lastCap = 0, lastIna = 0, lastLcd = 0, lastWifiTry = 0;
 int screenIndex = 0;
 bool lastReportedPressed = false;
 
@@ -849,6 +1014,17 @@ void printToSerial() {
     Serial.print(F("%  left: ")); Serial.print(battRemWh, 2); Serial.print(F(" Wh"));
     if (!isnan(battHoursLeft)) { Serial.print(F(" = ")); Serial.print(battHoursLeft, 1); Serial.print(F(" h")); }
     Serial.print(F("  used: ")); Serial.print(battUsedWh, 3); Serial.println(F(" Wh"));
+
+    soh::Status hs = sohEst.status();
+    Serial.print(F("Health  SOH: "));
+    if (hs.conf == soh::CONF_NONE) {
+      Serial.print(F("learning ")); Serial.print(hs.progressPct, 0); Serial.print('%');
+    } else {
+      Serial.print(hs.sohPct, 1); Serial.print(F("% +-")); Serial.print(hs.sigmaPct, 1);
+      Serial.print(F(" (")); Serial.print(soh::confText(hs.conf)); Serial.print(')');
+    }
+    Serial.print(F("  learner: ")); Serial.print(soh::learnText(hs.learn));
+    Serial.print(F("  cycles: ")); Serial.println(hs.cycles, 2);
   }
 
   Serial.print(F("Fan     RPM: ")); Serial.print(fanRpm, 0);
@@ -897,9 +1073,34 @@ void muxTest() {
   Serial.println(F("  'both blocked' should be near 0 V. A big number means a shunt transistor is not turning on."));
 }
 
+void printHealthReport() {
+  Serial.println(F("--- Battery health ---"));
+  sohEst.debugLines([](const char* line, void* ctx) { (void)ctx; Serial.println(line); }, nullptr);
+  Serial.print(F("INA219: "));
+  Serial.print(INA219_CALIBRATED ? F("calibrated") : F("uncalibrated (PLACEHOLDER gain and offset)"));
+  Serial.print(F(", averaging restored ")); Serial.print(inaConfigRewrites); Serial.println(F(" times"));
+  Serial.println(healthLogSentSeq == healthLogSeq ? F("Health log: all records sent") : F("Health log: a record is waiting for Firebase"));
+}
+
 void handleSerial() {
+  if (sohResetAskMs && millis() - sohResetAskMs > 10000) {
+    sohResetAskMs = 0;
+    Serial.println(F("Battery health reset cancelled (no answer)."));
+  }
   while (Serial.available()) {
     char c = Serial.read();
+    if (c == '\r' || c == '\n' || c == ' ') continue;
+    if (sohResetAskMs) {               // waiting for the `z` confirmation: only y resets, anything else cancels
+      sohResetAskMs = 0;
+      if (c == 'y') {
+        sohEst.resetAll();
+        sohSave();
+        Serial.println(F("Battery health reset. Learning starts again from the next discharge."));
+      } else {
+        Serial.println(F("Battery health reset cancelled."));
+      }
+      continue;
+    }
     if (c == 'b') {
       Serial.println(F("Recapturing cap baseline, hands off the pad..."));
       if (capCaptureBaseline()) { Serial.print(F("Baseline: ")); Serial.print(capBaselineUs, 2); Serial.println(F(" us")); }
@@ -920,6 +1121,11 @@ void handleSerial() {
     } else if (c == 'x') {
       prefs.remove("remWh");
       Serial.println(F("Saved battery value cleared. Reboot to restart from the voltage reading."));
+    } else if (c == 'h') {
+      printHealthReport();
+    } else if (c == 'z') {
+      sohResetAskMs = millis() | 1;
+      Serial.println(F("Reset ALL battery health learning (slices, fit, cycle count)? Type y within 10 s to confirm."));
     }
   }
 }
@@ -946,6 +1152,7 @@ void readAllSensors() {
 
   readINA219();
   batteryUpdate();
+  sohUpdate();
   updateFanRpm(millis());
   refreshTelemetry();
 }
@@ -997,12 +1204,15 @@ void setup() {
   inaOk = ina219.begin();
   if (inaOk) {
     ina219.setCalibration_32V_1A();   // 32 V, 1 A range, assumes the 0.1 ohm (R100) shunt
+    ina219WriteConfig();              // then 128-sample averaging
+    delay(150);                       // one full averaged conversion (bus and shunt take 69 ms each)
     Serial.println(F("INA219 OK"));
     readINA219();
   } else {
     Serial.println(F("INA219 not found, continuing without it."));
   }
   batteryInit();
+  sohInit();
 
   // Fan tach: open-collector output, one falling edge per pulse. The external 10k pull-up sits on the fan side of the
   // 10k series resistor. No internal pull-up: it would sit on the GPIO side and lift a low to about 0.6 V.
@@ -1045,7 +1255,8 @@ void setup() {
   xTaskCreatePinnedToCore(uploadTask, "upload", 16384, NULL, 1, NULL, 0);
 
   Serial.println(F("Commands: b = new cap baseline, s = toggle cap stream, c = cap raw dump, m = mux test,"));
-  Serial.println(F("          f = battery is full, r = reset peak current, x = clear saved battery value"));
+  Serial.println(F("          f = battery is full, r = reset peak current, x = clear saved battery value,"));
+  Serial.println(F("          h = battery health report, z = reset battery health (asks first)"));
   Serial.println(F("Setup complete.\n"));
 }
 
@@ -1070,6 +1281,11 @@ void loop() {
       Serial.print(F("  delta ")); Serial.print(capDeltaUs, 1); Serial.println(F(" us"));
       drawScreen();
     }
+  }
+
+  if (now - lastIna >= INA_SAMPLE_MS) {
+    lastIna = now;
+    inaSample();
   }
 
   if (now - lastRead >= READ_INTERVAL_MS) {

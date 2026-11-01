@@ -440,6 +440,7 @@ struct Estimator {
   // The last closed slice, waiting to be appended to /station/healthLog
   Result  result;
   bool    resultPending;
+  uint32_t resultCount;                  // goes up with every new result (not saved), so the caller can spot one
 
   Totals  tot;
 
@@ -480,7 +481,9 @@ struct Estimator {
 
   // The `z` command: forget everything, and log a marker so the chart breaks its line.
   void resetAll() {
+    uint32_t count = resultCount;
     clearAll();
+    resultCount = count;
     Result r = blankResult();
     r.reset = true;
     r.why = WHY_RESET;
@@ -737,7 +740,7 @@ struct Estimator {
     return r;
   }
 
-  void post(const Result& r) { result = r; resultPending = true; }
+  void post(const Result& r) { result = r; resultPending = true; resultCount++; }
 
   void ringPush(double voc, double mA) {
     ring[ringHead].t = tot.t;

@@ -1,6 +1,6 @@
 # Satellite V-Dipole Tracking Station: Dashboard v2 Spec
 
-Status: v1 site built (section 13). Battery state of health (section 14) approved; step S1 (logic and PC tests) built, S2 to S4 in progress.
+Status: v1 site built (section 13). Battery state of health (section 14) approved; S1 (logic and PC tests) and S2 (firmware 1.1) built, S3 and S4 in progress.
 Last updated: 2026-11-01. This file replaces the draft PDF as the source of truth.
 
 Rules that apply to everything below:
@@ -293,7 +293,7 @@ Built differently from the draft, on purpose:
 
 ## 14. Battery state of health (the course "go beyond" algorithm)
 
-Status: designed 2026-10-31 with Cole's answers (O9 to O12) and approved the same day. S1 built 2026-11-01: `firmware/station_firmware/soh.h` and its PC tests. S2 to S4 in progress (14.19). Details settled or changed while building S1 are marked "(S1)".
+Status: designed 2026-10-31 with Cole's answers (O9 to O12) and approved the same day. S1 built 2026-11-01: `firmware/station_firmware/soh.h` and its PC tests. S2 built the same day: firmware 1.1 uses it (compiled, not yet run on the station). S3 and S4 in progress (14.19). Details settled or changed while building S1 are marked "(S1)".
 
 ### 14.1 What it is, and how it meets the course
 
@@ -535,6 +535,6 @@ One local commit per step, after Cole approves this section.
 | Step | Work | Acceptance |
 |---|---|---|
 | S1 | `soh.h` pure logic, synthetic curve generator, C++ tests | All firmware tests pass on the PC. Done 2026-11-01: 137 checks pass with clang and GCC, and `soh.h` compiles for the ESP32 with all warnings on and none reported. |
-| S2 | Firmware: INA219 averaging, SOH wiring, persistence, `h` and `z`, health uploads, version 1.1 | Compiles with no new warnings; secret scan passes |
+| S2 | Firmware: INA219 averaging, SOH wiring, persistence, `h` and `z`, health uploads, version 1.1 | Compiles with no new warnings; secret scan passes. Done 2026-11-01: 1,112,128 bytes of flash (84%), 55,424 bytes of RAM (16%), no warnings from the sketch or `soh.h`. The battery estimate now shares the voltage table and the 0.25 ohm placeholder with `soh.h`. Not run on the station. |
 | S3 | Website: data source, pill and panel, health chart tab, fixtures | Unit and Playwright tests pass at both sizes, no console errors |
 | S4 | Docs: README, firmware README, this section marked built; final report | Report lists what was verified, what was not, and the accuracy limits |
