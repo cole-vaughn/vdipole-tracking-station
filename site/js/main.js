@@ -4,13 +4,12 @@ import { CONFIG } from "./config.js";
 import { createSource } from "./source.js";
 import { freshness } from "./lib/freshness.js";
 import { fmtAge, fmtUptime, fmtClock, isNum } from "./lib/format.js";
-import { createRfBaseline } from "./lib/rf.js";
 import { createChargingDetector } from "./lib/charging.js";
 import {
   initCards, renderBattery, renderRf, renderFan, renderTouch, renderEnv, touchView, flashTouch, setText,
 } from "./ui/cards.js";
 import { createGraphs } from "./ui/graphs.js";
-import { initHealth, renderHealth } from "./ui/health.js";
+import { initRqs, renderRqs } from "./ui/rqs.js";
 import { startSatellite } from "./ui/satellite.js";
 
 const $ = (id) => document.getElementById(id);
@@ -30,11 +29,8 @@ const app = {
   globe: null,
   charge: null,
   rfLevel: 0,
-  health: null,      // /station/health
-  healthLog: [],     // /station/healthLog records, oldest first as they arrive
 };
 const now = () => Date.now() + app.offsetMs; // server-corrected time
-const rf = createRfBaseline(CONFIG.rf);
 const charging = createChargingDetector(CONFIG.charging);
 
 function loadUnit() {
@@ -107,12 +103,14 @@ function tick() {
   setText("d-offset", `${Math.round(app.offsetMs)} ms`);
   setText("d-fw", app.meta?.fw ?? "--");
   setText("d-tle", app.sat?.available ? fmtAge(app.sat.tleAgeMs) : "unavailable");
-  setText("d-rf", rf.baseline() === null ? `learning (${rf.size} samples)` : `${rf.baseline().toFixed(1)} dBm`);
+  const L = app.latest;
+  setText("d-rf", isNum(L?.rfBaselineDbm)
+    ? `${L.rfBaselineDbm.toFixed(1)} dBm, spread ${isNum(L.rfSigmaDb) ? L.rfSigmaDb.toFixed(2) : "--"} dB`
+    : L?.rqsLabel === "WARMING UP" ? "station warming up" : "--");
   const c = app.charge;
   setText("d-charge", c && c.state !== "unknown"
     ? `${c.state}${isNum(c.excessV) ? `, excess ${c.excessV.toFixed(2)} V` : ""}${isNum(c.slopeMvPerMin) ? `, slope ${c.slopeMvPerMin.toFixed(0)} mV/min` : ""}`
     : "--");
-  setText("d-health", app.source ? `${app.healthLog.length} record${app.healthLog.length === 1 ? "" : "s"}` : "--");
 
   // Battery goes grey while offline, so re-render it when the status changes.
   if (f.state !== tick.prevState) { tick.prevState = f.state; renderAll(); }
@@ -122,9 +120,9 @@ function tick() {
 function renderAll() {
   const rec = app.latest;
   const stationOffline = document.body.dataset.station === "offline";
+  renderRqs(rec, { stationOffline, meta: app.meta, unit: app.unit, records: graphs.records, nowMs: now() });
   renderBattery(rec, CONFIG.battery, { stationOffline, charge: app.charge, chargingCfg: CONFIG.charging });
-  renderHealth(app.health, app.healthLog, { stationOffline }, CONFIG.soh);
-  app.rfLevel = renderRf(rec, rf, app.sat?.available ? app.sat.pos.elDeg : null);
+  app.rfLevel = renderRf(rec, CONFIG.rf, app.sat?.available ? app.sat.pos.elDeg : null);
   renderFan(rec, CONFIG.fan);
   renderTouch(touchView(rec, app.touch));
   renderEnv(rec, app.unit);
@@ -134,7 +132,6 @@ function onLatest(rec) {
   app.readError = null;
   app.latest = rec && typeof rec === "object" ? rec : null;
   if (app.latest) {
-    rf.add(app.latest.ts, app.latest.rfFiltDbm);
     app.charge = charging.update(app.latest);
     graphs.addLive(app.latest);
   }
@@ -198,9 +195,9 @@ addEventListener("online", tick);
 addEventListener("offline", tick);
 
 initCards();
-initHealth();
+initRqs();
 showUnit();
-const graphs = createGraphs({ config: CONFIG, now, getUnit: () => app.unit, onError: noteError });
+const graphs = createGraphs({ config: CONFIG, now, getUnit: () => app.unit, onError: noteError, onLoad: () => renderAll() });
 
 try {
   app.source = createSource(CONFIG);
@@ -214,19 +211,7 @@ if (app.source) {
   s.onConnection((c) => { app.connected = c; if (c) app.everConnected = true; tick(); });
   s.onLatest(onLatest, onReadError);
   s.onTouch(onTouch, onReadError);
-  s.onMeta((m) => { app.meta = m; }, () => {});
-  // Battery health has its own error handling: if its rules are missing, the rest of the page still works.
-  const healthError = (err) => noteError(`Battery health: ${err?.code === "PERMISSION_DENIED" ? "permission denied by the database rules" : err?.message || "read error"}`);
-  s.onHealth((h) => {
-    app.health = h && typeof h === "object" ? h : null;
-    renderHealth(app.health, app.healthLog, { stationOffline: document.body.dataset.station === "offline" }, CONFIG.soh);
-  }, healthError);
-  s.onHealthLog((r) => {
-    if (!r || typeof r !== "object") return;
-    app.healthLog.push(r);
-    graphs.setHealthRecords(app.healthLog);
-    renderHealth(app.health, app.healthLog, { stationOffline: document.body.dataset.station === "offline" }, CONFIG.soh);
-  }, healthError);
+  s.onMeta((m) => { app.meta = m && typeof m === "object" ? m : null; renderAll(); }, () => {});
   graphs.setSource(s);
 } else {
   graphs.noSource("No history yet: the page is not connected to the station database.");
@@ -256,7 +241,7 @@ startSatellite({
   onError: noteError,
   onUpdate(sat) {
     app.sat = sat;
-    app.rfLevel = renderRf(app.latest, rf, sat.available ? sat.pos.elDeg : null);
+    app.rfLevel = renderRf(app.latest, CONFIG.rf, sat.available ? sat.pos.elDeg : null);
     app.globe?.update({ pos: sat.available ? sat.pos : null, tracker: sat.tracker, now: now(), rfLevel: app.rfLevel });
   },
 });

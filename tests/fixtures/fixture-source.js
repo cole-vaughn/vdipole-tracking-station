@@ -3,6 +3,10 @@
 // The page shows a "TEST FIXTURE DATA" bar the whole time it is in use.
 //
 // URL options: ?autoplay=0 stops the generated live updates (tests drive it through window.__fixture).
+//
+// The reception quality score fields (SPEC 14.12) come from a made-up pass schedule below, not from orbit data and
+// not from the station: a pass in progress when the page opens, earlier passes, a low pass where nothing was heard,
+// and a burst of interference outside any pass (tagged NO PASS, so it can score at most 70).
 
 const params = new URLSearchParams(location.search);
 
@@ -23,19 +27,67 @@ let seed = 42;
 const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
 const noise = (a) => (rand() - 0.5) * 2 * a;
 
-function makeRecord(ts) {
+// ---------- Made-up reception quality score ----------
+const T = Date.now();
+const MIN = 60e3;
+// start, length, highest elevation, and the made-up signal: dB above the floor with the satellite overhead (null: none)
+const PASSES = [
+  { start: T - 6 * MIN, len: 12 * MIN, maxEl: 48, sig: 13 },
+  { start: T - 190 * MIN, len: 11 * MIN, maxEl: 22, sig: 12 },
+  { start: T - 13 * 60 * MIN, len: 12.5 * MIN, maxEl: 64, sig: 18 },
+  { start: T - 18 * 60 * MIN, len: 6 * MIN, maxEl: 8, sig: null },
+  { start: T + 95 * MIN, len: 9 * MIN, maxEl: 15, sig: 12 },
+];
+const BURST = { start: T - 9 * 60 * MIN, len: 4 * MIN, db: 14 };
+const clamp01 = (x) => Math.min(1, Math.max(0, x));
+const r1 = (x) => Math.round(x * 10) / 10, r2 = (x) => Math.round(x * 100) / 100;
+// Free-space loss relative to overhead, the same formula as rqs.h (Re 6371 km, h 820 km).
+function friisDb(elDeg) {
+  const e = (elDeg * Math.PI) / 180, re = 6371, rs = 6371 + 820;
+  return -20 * Math.log10((Math.sqrt(rs * rs - (re * Math.cos(e)) ** 2) - re * Math.sin(e)) / 820);
+}
+const labelOf = (v) => (v < 15 ? "NO SIGNAL" : v < 40 ? "WEAK" : v < 70 ? "GOOD" : "STRONG");
+
+function rqsFields(ts, tempC, withParts) {
+  const base = -75.2 + 0.15 * Math.sin(ts / 5.4e6), sigma = 0.3;
+  const pass = PASSES.find((p) => ts >= p.start && ts <= p.start + p.len);
+  let excess = noise(0.25), el = null, corr = null;
+  if (pass) {
+    el = 5 + (pass.maxEl - 5) * Math.sin((Math.PI * (ts - pass.start)) / pass.len);
+    if (pass.sig !== null) excess = Math.max(excess, pass.sig + friisDb(el) + noise(0.25));
+    const secs = (ts - pass.start) / 1000;
+    if (secs >= 20) corr = pass.sig === null ? 0.12 : Math.min(0.93, 0.6 + secs / 900);
+  } else if (ts >= BURST.start && ts <= BURST.start + BURST.len) {
+    excess = BURST.db + noise(0.4);
+  }
+  const detected = excess > 4 * sigma;
+  const sSnr = clamp01(excess / 12), sDet = detected ? 1 : 0;
+  const sPass = pass ? 0.4 + 0.6 * clamp01(((corr ?? 0.3) - 0.3) / 0.6) : 0;
+  const rqs = Math.min(100, 100 * (0.5 * sSnr + 0.2 * sDet + 0.3 * sPass * sDet));
+  const next = PASSES.map((p) => p.start).filter((s) => s > ts).sort((a, b) => a - b)[0];
+  const f = {
+    rfFiltDbm: r2(base + excess), rqs: r1(rqs), rqsLabel: labelOf(rqs), rqsTag: pass ? "PASS" : "NO PASS",
+    rfExcessDb: r2(excess), rfBaselineDbm: r2(base), rfThresholdDbm: r2(base + 4 * sigma), rfSigmaDb: sigma,
+    rfDetected: detected, passElDeg: el === null ? null : r1(el), passCorr: corr === null ? null : r2(corr),
+    nextPassEpoch: next ? Math.floor(next / 1000) : null, rqsTempC: r2(tempC),
+  };
+  if (withParts) Object.assign(f, { rqsSnr: r2(sSnr), rqsDet: sDet, rqsPass: r2(sPass), rqsHealth: 1 });
+  return f;
+}
+
+function makeRecord(ts, latest = false) {
   const t = ts / 1000;
-  const rf = -75 + noise(0.6);
   const therm = 22.4 + Math.sin(t / 3000) * 0.8 + noise(0.3);
+  const tempC = 22.1 + Math.sin(t / 3000) * 0.7 + noise(0.05);
+  const q = rqsFields(ts, tempC, latest);
   return {
     ts,
-    tempC: 22.1 + Math.sin(t / 3000) * 0.7 + noise(0.05),
+    tempC,
     pressHPa: 991.2 + Math.sin(t / 9000) * 1.5 + noise(0.05),
     altM: 186 - Math.sin(t / 9000) * 12 + noise(0.4),
     thermRaw: therm,
     thermFilt: therm - noise(0.1),
-    rfRawDbm: rf + noise(0.8),
-    rfFiltDbm: rf,
+    rfRawDbm: r2(q.rfFiltDbm + noise(0.8)),
     capTdUs: 610 + noise(1.5),
     capDeltaUs: noise(1.5),
     capPF: 410 + noise(1),
@@ -53,6 +105,7 @@ function makeRecord(ts) {
     fanStalled: false,
     rssi: -61 + Math.round(noise(2)),
     uptimeS: 3 * 3600 + 720,
+    ...q,
   };
 }
 
@@ -70,53 +123,18 @@ function makeHistory(now) {
   return out;
 }
 
-// Made-up battery health, shaped like /station/health and /station/healthLog (SPEC 14.12). Three weeks of
-// discharges with a `z` reset in the middle, so the chart shows a break, and a few rejected slices.
-function makeHealth(now) {
-  return {
-    ts: now - 40e3, battSohPct: 93.1, battSohSigmaPct: 4.3, battSohConf: "high", battCapWhEst: 24.76,
-    battCycles: 9.6, battSohSlices: 6, battSohProgressPct: 100, battSohLearn: "discharging", inaCal: false,
-  };
-}
-
-function makeHealthLog(now) {
-  const day = 86400e3;
-  const ok = (d, start, slice, fit, sig, e, hours) =>
-    ({ ts: now - d * day, ok: true, start, e, ah: e / 11.3, x: (e / 24.8) * 100, sx: 2.1, sliceSohPct: slice,
-       fitSohPct: fit, fitSigmaPct: sig, tempC: 22, hours });
-  const no = (d, why, fit, sig, extra = {}) =>
-    ({ ts: now - d * day, ok: false, why, fitSohPct: fit, fitSigmaPct: sig, hours: 3.1, tempC: 21, ...extra });
-  return [
-    ok(20, "full", 95.1, 95.1, 9.8, 12.1, 10.2),
-    ok(18, "rest", 91.0, 93.4, 7.9, 6.3, 5.4),
-    no(17, "too cold", 93.4, 7.9, { tempC: 11, start: "full", hours: 9.8 }),
-    ok(15, "full", 94.6, 93.9, 5.2, 18.5, 15.6),
-    { ts: now - 13 * day, ok: false, why: "reset" },
-    no(12, "no end point: current not steady", null, null, { start: "rest" }),
-    ok(11, "full", 93.2, 93.2, 8.4, 11.6, 9.8),
-    ok(9, "rest", 90.4, 92.1, 6.6, 7.1, 6.0),
-    ok(7, "full", 94.0, 92.8, 5.1, 19.2, 16.3),
-    no(5, "too small", 92.8, 5.1, { start: "full", hours: 0.4 }),
-    ok(4, "full", 93.5, 93.0, 4.6, 21.9, 18.6),
-    ok(2, "rest", 91.8, 92.8, 4.5, 8.8, 7.5),
-    ok(1, "full", 94.4, 93.1, 4.3, 20.4, 17.3),
-  ];
-}
-
 export function createSource() {
   const subs = {
-    latest: new Set(), touch: new Set(), meta: new Set(), conn: new Set(), offset: new Set(), health: new Set(), healthLog: new Set(),
+    latest: new Set(), touch: new Set(), meta: new Set(), conn: new Set(), offset: new Set(),
   };
   const now = Date.now();
   const state = {
-    latest: makeRecord(now),
+    latest: makeRecord(now, true),
     touch: { state: false, count: 3, ts: now - 140e3 },
-    meta: { fw: "fixture", bootTs: now - (3 * 3600 + 720) * 1000 },
+    meta: { fw: "fixture", bootTs: now - (3 * 3600 + 720) * 1000, rqsAlphaT: 0 },
     connected: true,
     offset: 0,
     history: makeHistory(now),
-    health: params.get("health") === "none" ? null : makeHealth(now),
-    healthLog: params.get("health") === "none" ? [] : makeHealthLog(now),
   };
   const emit = (k, v) => subs[k].forEach((cb) => cb(v));
   const sub = (k, value) => (cb) => { subs[k].add(cb); queueMicrotask(() => cb(value())); return () => subs[k].delete(cb); };
@@ -126,7 +144,7 @@ export function createSource() {
     clearInterval(timer);
     if (!on) return;
     timer = setInterval(() => {
-      const r = makeRecord(Date.now());
+      const r = makeRecord(Date.now(), true);
       r.uptimeS = state.latest.uptimeS + 2;
       api.setLatest(r);
     }, 2000);
@@ -142,8 +160,7 @@ export function createSource() {
     setConnected(c) { state.connected = c; emit("conn", c); },
     setHistory(records) { state.history = records; },
     clearLatest() { state.latest = null; emit("latest", null); },
-    setHealth(h) { state.health = h === null ? null : { ...state.health, ...h }; emit("health", state.health); },
-    addHealthLog(r) { state.healthLog.push(r); emit("healthLog", r); },
+    setMeta(m) { state.meta = m; emit("meta", m); },
     autoplay,
     get state() { return state; },
   };
@@ -159,13 +176,6 @@ export function createSource() {
     onMeta: sub("meta", () => state.meta),
     onConnection: sub("conn", () => state.connected),
     onClockOffset: sub("offset", () => state.offset),
-    onHealth: sub("health", () => state.health),
-    // Like onChildAdded: every existing record once, then each new one.
-    onHealthLog(cb) {
-      subs.healthLog.add(cb);
-      queueMicrotask(() => state.healthLog.forEach((r) => cb(r)));
-      return () => subs.healthLog.delete(cb);
-    },
     async fetchHistory(sinceMs, limit) {
       return state.history.filter((r) => r.ts >= sinceMs).slice(-limit);
     },

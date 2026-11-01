@@ -3,7 +3,7 @@
 // never contains test data.
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
 import {
-  getDatabase, ref, onValue, onChildAdded, query, orderByChild, startAt, limitToLast, get, goOffline, goOnline,
+  getDatabase, ref, onValue, query, orderByChild, startAt, limitToLast, get, goOffline, goOnline,
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-database.js";
 
 export function createSource(config) {
@@ -19,13 +19,6 @@ export function createSource(config) {
     onMeta: (cb, onError) => listen("station/meta", cb, onError),
     onConnection: (cb) => listen(".info/connected", (v) => cb(v === true)),
     onClockOffset: (cb) => listen(".info/serverTimeOffset", (v) => cb(typeof v === "number" ? v : 0)),
-    onHealth: (cb, onError) => listen("station/health", cb, onError),
-
-    // Battery health log: one listener on the newest records (the rules allow only this query shape).
-    // It downloads them once, then only each new record, about 200 bytes per discharge.
-    onHealthLog: (cb, onError) => onChildAdded(
-      query(ref(db, "station/healthLog"), orderByChild("ts"), limitToLast(config.soh.logLimit)),
-      (snap) => cb(snap.val()), onError),
 
     // History is a query, never a listener. The database rules only allow this shape of read.
     async fetchHistory(sinceMs, limit) {

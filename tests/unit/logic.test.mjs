@@ -7,7 +7,6 @@ import { freshness } from "../../site/js/lib/freshness.js";
 import { fmt, fmtAge, fmtHoursLeft, fmtTemp, fmtUptime, fmtCountdown } from "../../site/js/lib/format.js";
 import { batteryBand, isLowBattery, packVoltsAtSoc } from "../../site/js/lib/battery.js";
 import { createChargingDetector } from "../../site/js/lib/charging.js";
-import { createRfBaseline } from "../../site/js/lib/rf.js";
 import { downsample, insertGaps, pickSeries } from "../../site/js/lib/series.js";
 import { createTracker, footprintRadiusKm } from "../../site/js/lib/orbit.js";
 import { tleChecksumOk } from "../../tools/fetch-orbit.mjs";
@@ -102,25 +101,6 @@ test("charging: sustained excess enters, a brief dip does not exit, a clear drop
 test("charging: missing readings give unknown", () => {
   const det = createChargingDetector(CONFIG.charging);
   assert.equal(det.update({ ts: 0, battV: null, battmA: 300, battSocPct: 60 }).state, "unknown");
-});
-
-test("rf: baseline is the low percentile and a pass does not raise it", () => {
-  const rf = createRfBaseline(CONFIG.rf);
-  let ts = 0;
-  for (let i = 0; i < 600; i++) rf.add((ts += 2000), -75 + (i % 5) * 0.2); // 20 min of noise
-  const base = rf.baseline();
-  assert.ok(base > -75.01 && base < -74.5, `baseline ${base}`);
-  for (let i = 0; i < 300; i++) rf.add((ts += 2000), -65); // 10 min pass at +10 dB
-  assert.ok(Math.abs(rf.baseline() - base) < 0.01, "baseline held during the pass");
-  assert.ok(Math.abs(rf.level(-65) - 10 / 12) < 0.02);
-  assert.equal(rf.level(-80), 0);
-});
-
-test("rf: no baseline means level 0", () => {
-  const rf = createRfBaseline(CONFIG.rf);
-  rf.add(1000, -60);
-  assert.equal(rf.baseline(), null);
-  assert.equal(rf.level(-50), 0);
 });
 
 test("series: gaps for null and for missing time, downsample keeps spikes and gaps", () => {

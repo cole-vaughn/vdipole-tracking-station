@@ -46,14 +46,63 @@
       <div><dt>Clock offset</dt><dd id="d-offset">--</dd></div>
       <div><dt>Firmware</dt><dd id="d-fw">--</dd></div>
       <div><dt>Orbit data age</dt><dd id="d-tle">--</dd></div>
-      <div><dt>RF baseline</dt><dd id="d-rf">--</dd></div>
+      <div><dt>RF baseline (from the station)</dt><dd id="d-rf">--</dd></div>
       <div><dt>Charging inference (untuned)</dt><dd id="d-charge">--</dd></div>
-      <div><dt>Battery health log</dt><dd id="d-health">--</dd></div>
       <div><dt>Last error</dt><dd id="d-error">none</dd></div>
     </dl>
   </section>
 
   <main id="main" class="grid">
+    <section class="panel rqs-panel" id="rqs-panel" aria-labelledby="rqs-h" data-band="none" data-state="none">
+      <header class="panel-head">
+        <h2 id="rqs-h">Reception quality <span class="sub">score from the station, 0 to 100</span></h2>
+        <span class="tag rqs-tag" id="rqs-tag" data-tag="none">--</span>
+      </header>
+      <div class="rqs-main">
+        <svg class="rqs-gauge" viewBox="-12 -14 224 160" role="img" aria-labelledby="rqs-gauge-label">
+          <title id="rqs-gauge-label">Reception quality score: no data yet.</title>
+          <g id="rqs-bands"></g>
+          <path class="rqs-track" id="rqs-track" d=""/>
+          <path class="rqs-value" id="rqs-value" d=""/>
+          <g class="rqs-ticks" id="rqs-ticks"></g>
+          <text class="rqs-num" id="rqs-num" x="100" y="104">--</text>
+          <text class="rqs-of" x="100" y="126">of 100</text>
+        </svg>
+        <div class="rqs-side">
+          <p class="rqs-label" id="rqs-label">--</p>
+          <p class="rqs-tagwords" id="rqs-tagwords"></p>
+          <p class="rqs-flags">
+            <span class="tag tag-good" id="rqs-detected" hidden>DETECTED</span>
+            <span class="tag tag-warn" id="rqs-temp-na" hidden>TEMP N/A</span>
+            <span class="tag tag-warn" id="rqs-batt-na" hidden>BATT N/A</span>
+          </p>
+          <ul class="rqs-bars" id="rqs-bars">
+            <li data-bar="snr"><span class="rqs-bar-name">Strength</span><span class="rqs-bar"><i></i></span><span class="rqs-bar-val" id="rqs-bar-snr">--</span></li>
+            <li data-bar="det"><span class="rqs-bar-name">Detection</span><span class="rqs-bar"><i></i></span><span class="rqs-bar-val" id="rqs-bar-det">--</span></li>
+            <li data-bar="pass"><span class="rqs-bar-name">Pass match</span><span class="rqs-bar"><i></i></span><span class="rqs-bar-val" id="rqs-bar-pass">--</span></li>
+            <li data-bar="health"><span class="rqs-bar-name">Health</span><span class="rqs-bar"><i></i></span><span class="rqs-bar-val" id="rqs-bar-health">--</span></li>
+          </ul>
+        </div>
+      </div>
+      <figure class="rqs-spark-wrap">
+        <svg class="rqs-spark" id="rqs-spark" viewBox="0 0 300 48" preserveAspectRatio="none" role="img" aria-label="Score over the last 30 minutes">
+          <g class="rqs-spark-guides" id="rqs-spark-guides"></g>
+          <path class="rqs-spark-line" id="rqs-spark-line" d=""/>
+        </svg>
+        <figcaption><span>30 min ago</span><span>score, last 30 minutes</span><span>now</span></figcaption>
+      </figure>
+      <dl class="detail rqs-detail">
+        <div><dt>Next pass</dt><dd id="rqs-next">--</dd></div>
+        <div><dt>Expected elevation</dt><dd id="rqs-el">--</dd></div>
+        <div><dt>Pass correlation</dt><dd id="rqs-corr">--</dd></div>
+      </dl>
+      <button type="button" class="btn rqs-why-btn" id="rqs-why-btn" aria-expanded="false" aria-controls="rqs-why">Why this score?</button>
+      <div class="rqs-why" id="rqs-why" role="region" aria-labelledby="rqs-why-h" hidden>
+        <h3 id="rqs-why-h">Why this score?</h3>
+        <dl id="rqs-why-rows"></dl>
+      </div>
+    </section>
+
     <section class="panel globe-panel" aria-labelledby="globe-h">
       <header class="panel-head">
         <h2 id="globe-h"><span id="sat-name">Meteor-M2-4</span> <span class="sub" id="sat-downlink"></span></h2>
@@ -97,17 +146,7 @@
         <div class="batt-text">
           <p class="big"><span id="batt-pct">--</span><span class="unit">%</span></p>
           <p class="batt-left"><span id="batt-left">--</span> left</p>
-          <button type="button" class="soh-pill" id="soh-pill" data-band="none" data-state="none" data-conf="none"
-            aria-expanded="false" aria-controls="soh-panel" aria-label="Battery health: no data yet. Show details.">
-            <span id="soh-text">SOH --</span><span class="est" id="soh-est" hidden>est.</span>
-          </button>
         </div>
-      </div>
-      <div class="soh-panel" id="soh-panel" role="region" aria-labelledby="soh-panel-h" hidden>
-        <h3 id="soh-panel-h">Battery health <span class="sub">state of health estimate</span></h3>
-        <dl id="soh-rows"></dl>
-        <p class="soh-uncal" id="soh-uncal" hidden>Uncalibrated: the current sensor's gain and offset are not measured yet, so every energy number carries its gain error.</p>
-        <p class="note">Estimate from voltage and current, not a lab capacity test. 80% is the usual end-of-life line (USABC); under 60% is this project's own "replace" line.</p>
       </div>
       <p class="warn" id="batt-warn" hidden></p>
       <dl class="detail">
@@ -138,7 +177,7 @@
         <div><dt>Baseline</dt><dd id="rf-base">--</dd></div>
         <div><dt>Satellite elevation</dt><dd id="rf-el">--</dd></div>
       </dl>
-      <p class="note">One power number from the antenna chain, not a spectrum. A rise can be interference, so compare it with the satellite elevation.</p>
+      <p class="note">One power number from the antenna chain, not a spectrum. The baseline comes from the station. A rise can be interference: the reception quality score checks it against the predicted pass.</p>
     </section>
 
     <section class="panel fan-panel" aria-labelledby="fan-h">
@@ -192,7 +231,6 @@
     <header class="graphs-head">
       <h2 id="graphs-h">Graphs</h2>
       <div class="range" role="group" aria-label="Time range" id="range-group"></div>
-      <p class="range-note" id="range-note" hidden>Battery health is always all time</p>
     </header>
     <div class="tabs" role="tablist" aria-label="Graph groups" id="graph-tabs"></div>
     <p class="graphs-msg" id="graphs-msg" role="status"></p>

@@ -30,15 +30,9 @@ export const CONFIG = {
     lowPassDeg: 15,        // passes peaking below this are marked "low" (weak signal expected)
   },
 
-  // RF visuals use dB above a rolling baseline, never absolute dBm (SPEC F4). All untuned.
-  rf: {
-    windowMin: 30,         // baseline window
-    percentile: 0.2,       // baseline = 20th percentile of the window
-    fullScaleDb: 12,       // level 1.0 at this many dB above baseline
-    holdAboveDb: 3,        // while this far above baseline, freeze the baseline
-    maxHoldMin: 20,        // stop freezing after this long (longer than any pass)
-    minSamples: 30,        // samples needed before a baseline is shown
-  },
+  // RF visuals use dB above the station's own baseline (rfExcessDb, SPEC F4 and 14.5), never absolute dBm.
+  // Full scale matches the score's strength part (RQS_D_FULL_DB in rqs.h).
+  rf: { fullScaleDb: 12 },
 
   // Battery colors (SPEC D15).
   battery: { amberAtOrBelowPct: 35, redBelowPct: 20, lowVolts: 9.5, cells: 3 },
@@ -60,10 +54,6 @@ export const CONFIG = {
     minStateS: 60,         // never switch twice within this time
     maxGapS: 30,           // a data gap longer than this resets the detector
   },
-
-  // Battery health (SPEC 14). Bands (O12): 80 and above good (the USABC end-of-life line), 60 to 80 fair,
-  // under 60 replace (60 is a project choice, not cited). The log query is capped by the database rules at 500.
-  soh: { ratedWh: 26.6, goodAtOrAbovePct: 80, replaceBelowPct: 60, logLimit: 500 },
 
   // Measured 2026-10-31: about 1,050 to 1,110 RPM on the 12 V battery, about 650 on USB power (only while flashing).
   // Full speed on the battery spins the drawing at about the visual cap; USB power visibly slower.

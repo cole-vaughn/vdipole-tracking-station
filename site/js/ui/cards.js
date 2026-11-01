@@ -1,6 +1,7 @@
 // Instrument cards: battery, RF meter, fan, touch, environment. Each one renders "--" for null.
 import { fmt, fmtInt, fmtHoursLeft, fmtTemp, fmtClock, isNum } from "../lib/format.js";
 import { batteryBand, isLowBattery } from "../lib/battery.js";
+import { rfLevel } from "../lib/rqs.js";
 
 const $ = (id) => document.getElementById(id);
 export function setText(id, text) {
@@ -12,7 +13,7 @@ const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 let fanAnim = null;
 
 export function initCards() {
-  // S-meter scale: 0 to 12+ dB above baseline across the -70 to +70 degree sweep.
+  // S-meter scale: 0 to 12+ dB above the station's baseline across the -70 to +70 degree sweep.
   const ticks = $("smeter-ticks");
   const labels = ["0", "3", "6", "9", "12+"];
   let svg = "";
@@ -60,17 +61,18 @@ export function renderBattery(rec, cfg, { stationOffline, charge, chargingCfg })
   $("batt-charge").hidden = !(chargingCfg.showBadge && charge?.state === "charging" && !stationOffline);
 }
 
-export function renderRf(rec, rf, satElDeg) {
+// Level and baseline come from the station (rfExcessDb, rfBaselineDbm; SPEC F4 and 14.5), never from the browser.
+export function renderRf(rec, cfg, satElDeg) {
   const dbm = rec?.rfFiltDbm;
-  const base = rf.baseline();
-  const level = rf.level(dbm);
-  const excess = rf.excessDb(dbm);
+  const base = rec?.rfBaselineDbm;
+  const excess = rec?.rfExcessDb;
+  const level = rfLevel(rec, cfg.fullScaleDb);
   const panel = document.querySelector(".rf-panel");
-  panel.dataset.level = base === null || !isNum(dbm) ? "none" : "ok";
+  panel.dataset.level = isNum(excess) ? "ok" : "none";
   $("smeter-needle").style.transform = `rotate(${(-70 + 140 * level).toFixed(1)}deg)`;
-  setText("rf-excess", excess === null ? "--" : (excess >= 0 ? "+" : "") + excess.toFixed(1));
+  setText("rf-excess", isNum(excess) ? (excess >= 0 ? "+" : "") + excess.toFixed(1) : "--");
   setText("rf-dbm", fmt(dbm, 1));
-  setText("rf-base", base === null ? (isNum(dbm) ? "learning" : "--") : `${base.toFixed(1)} dBm`);
+  setText("rf-base", isNum(base) ? `${base.toFixed(1)} dBm` : rec?.rqsLabel === "WARMING UP" ? "learning" : "--");
   setText("rf-el", isNum(satElDeg) ? `${satElDeg.toFixed(0)}°, ${satElDeg > 0 ? "up" : "down"}` : "--");
   return level;
 }

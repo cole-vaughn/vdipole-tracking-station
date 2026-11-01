@@ -1,9 +1,9 @@
 // Graphs section: history query per range, live points appended at the right edge, gaps for null.
 // Charts are only built for the visible tab, so the page stays light.
-// The "Battery health" tab is different: one all-time chart from /station/healthLog (SPEC 14.14).
-import { fmtClock, toUnit, isNum } from "../lib/format.js";
+// The Radio tab also shades pass windows and detections and lists detections (SPEC 14.14), all from history.
+import { fmt, fmtClock, toUnit, isNum, dayLabel } from "../lib/format.js";
 import { downsample, insertGaps, pickSeries } from "../lib/series.js";
-import { healthSeries, notUsedText } from "../lib/health.js";
+import { detectionLog, spans, RQS_LINES } from "../lib/rqs.js";
 
 const C = { accent: "#4fd1ff", amber: "#ffb454", good: "#5ee09a", raw: "#7d8fa3", line: "#1f2b3a", muted: "#7d8fa3" };
 const raw = (field, label = "Raw") => ({ field, label, color: C.raw, width: 1 });
@@ -16,8 +16,14 @@ const GROUPS = [
     { id: "therm", title: "Thermistor raw vs filtered", unit: "temp", note: "Unverified calibration", series: [raw("thermRaw"), { field: "thermFilt", label: "Filtered", color: C.accent }] },
     { id: "bmp-therm", title: "BMP388 vs thermistor", unit: "temp", note: "Thermistor unverified", series: [{ field: "tempC", label: "BMP388", color: C.amber }, { field: "thermFilt", label: "Thermistor", color: C.accent }] },
   ] },
-  { id: "radio", label: "Radio", charts: [
-    { id: "rf", title: "RF power raw vs filtered", unit: "dBm", digits: 1, note: "Broadband, not a spectrum", series: [raw("rfRawDbm"), { field: "rfFiltDbm", label: "Filtered", color: C.accent }] },
+  { id: "radio", label: "Radio", detections: true, charts: [
+    { id: "rf", title: "RF power, baseline and threshold", unit: "dBm", digits: 1, note: "Broadband, not a spectrum", shade: true, series: [
+      raw("rfRawDbm"), { field: "rfFiltDbm", label: "Filtered", color: C.accent },
+      { field: "rfBaselineDbm", label: "Baseline", color: C.good, dash: [5, 4], width: 1.3 },
+      { field: "rfThresholdDbm", label: "Threshold", color: C.amber, dash: [2, 3], width: 1.3 },
+    ] },
+    { id: "rqs", title: "Reception quality score", unit: "score", digits: 1, yMin: 0, yMax: 100, guides: true, shade: true,
+      note: "Faint lines at 15, 40 and 70", series: [{ field: "rqs", label: "RQS", color: C.good }] },
   ] },
   { id: "power", label: "Power", charts: [
     { id: "batt-v", title: "Battery voltage", unit: "V", digits: 2, series: [{ field: "battV", label: "Voltage", color: C.good }] },
@@ -32,29 +38,50 @@ const GROUPS = [
     { id: "cap-pf", title: "Touch capacitance", unit: "pF", digits: 1, note: "Uncalibrated", series: [{ field: "capPF", label: "Capacitance", color: C.raw }] },
     { id: "rssi", title: "WiFi signal", unit: "dBm", series: [{ field: "rssi", label: "RSSI", color: C.accent }] },
   ] },
-  { id: "health", label: "Battery health", charts: [], allTime: true },
 ];
 
-const HEALTH_CARD =
-  `<figure class="chart-card health-card" data-chart="soh"><figcaption><span>Battery state of health</span>` +
-  `<span class="note" data-note></span></figcaption>` +
-  `<div class="chart-box"><canvas aria-label="Battery state of health over time" role="img"></canvas></div>` +
-  `<p class="note">Each point is one discharge. The line is the fit over all of them, the shaded band its plus-or-minus. ` +
-  `Always all time: the range buttons do not apply here.</p>` +
-  `<h3 class="health-sub">Discharges not used</h3><ul class="health-list" id="health-not-used"></ul></figure>`;
+const SHADE = { pass: "rgba(79, 209, 255, 0.11)", det: "rgba(255, 180, 84, 0.20)" };
 
-// Draws "end-of-life line (USABC)" on the dashed 80% line.
-const eolLabel = {
-  id: "eolLabel",
-  afterDatasetsDraw(chart) {
-    const y = chart.scales.y.getPixelForValue(80);
-    const { ctx, chartArea: { left, top, bottom } } = chart;
-    if (y < top || y > bottom) return;
+const DETECTIONS_CARD =
+  `<figure class="chart-card wide-card" data-card="detections"><figcaption><span>Detection log</span>` +
+  `<span class="note" data-note></span></figcaption><div class="det-wrap"><table class="det-table">` +
+  `<thead><tr><th scope="col">Start</th><th scope="col">Length</th><th scope="col">Peak excess</th>` +
+  `<th scope="col">Peak RQS</th><th scope="col">In a pass</th></tr></thead><tbody id="det-rows"></tbody></table></div>` +
+  `<p class="note">From the station's history in the chosen range. A detection shorter than the 10 s history step can be missed.</p></figure>`;
+
+// Shaded spans behind the lines: predicted pass windows and detections (chart.$spans, set on each redraw).
+const shading = {
+  id: "shading",
+  beforeDatasetsDraw(chart) {
+    const sp = chart.$spans;
+    if (!sp) return;
+    const { ctx, chartArea: { left, right, top, bottom }, scales: { x } } = chart;
     ctx.save();
-    ctx.fillStyle = C.muted;
-    ctx.font = '11px "IBM Plex Mono", ui-monospace, monospace';
-    ctx.textBaseline = "bottom";
-    ctx.fillText("end-of-life line (USABC)", left + 6, y - 3);
+    for (const [kind, list] of [["pass", sp.pass], ["det", sp.det]]) {
+      ctx.fillStyle = SHADE[kind];
+      for (const [a, b] of list) {
+        const x0 = Math.max(left, x.getPixelForValue(a)), x1 = Math.min(right, x.getPixelForValue(b));
+        if (x1 > x0 - 1) ctx.fillRect(x0, top, Math.max(1.5, x1 - x0), bottom - top);
+      }
+    }
+    ctx.restore();
+  },
+};
+
+// Faint lines at the label edges of the score.
+const guides = {
+  id: "guides",
+  beforeDatasetsDraw(chart) {
+    if (!chart.$guides) return;
+    const { ctx, chartArea: { left, right, top, bottom }, scales: { y } } = chart;
+    ctx.save();
+    ctx.strokeStyle = "rgba(125, 143, 163, 0.35)";
+    ctx.setLineDash([3, 4]);
+    for (const v of [RQS_LINES.weak, RQS_LINES.good, RQS_LINES.strong]) {
+      const py = Math.round(y.getPixelForValue(v)) + 0.5;
+      if (py < top || py > bottom) continue;
+      ctx.beginPath(); ctx.moveTo(left, py); ctx.lineTo(right, py); ctx.stroke();
+    }
     ctx.restore();
   },
 };
@@ -106,16 +133,15 @@ const crosshair = {
 const pad = (n) => String(n).padStart(2, "0");
 const tick = (v) => { const d = new Date(v); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
-export function createGraphs({ config, now, getUnit, onError }) {
+export function createGraphs({ config, now, getUnit, onError, onLoad }) {
   const g = config.graphs;
   const msg = document.getElementById("graphs-msg");
   let source = null;
   let range = g.ranges.find((r) => r.id === g.defaultRange);
   let activeGroup = GROUPS[0].id;
   let records = [];
-  let healthRecords = [];
-  let healthTimer = null;
   let loadedSince = Infinity;
+  const minLoadMs = 30 * 60e3;   // always at least 30 minutes, for the score's sparkline
   let retryMs = 2000, retryTimer = null, redrawTimer = null, loading = false;
   const charts = new Map(); // chart id -> Chart instance
 
@@ -151,13 +177,13 @@ export function createGraphs({ config, now, getUnit, onError }) {
     panel.className = "chart-grid"; panel.role = "tabpanel"; panel.id = `panel-${grp.id}`;
     panel.setAttribute("aria-labelledby", tab.id);
     panel.hidden = grp.id !== activeGroup;
-    if (grp.allTime) panel.insertAdjacentHTML("beforeend", HEALTH_CARD);
     for (const c of grp.charts) {
       panel.insertAdjacentHTML("beforeend",
         `<figure class="chart-card" data-chart="${c.id}"><figcaption><span>${c.title}</span>` +
         `<span class="note" data-note>${c.note ?? ""}</span></figcaption>` +
         `<div class="chart-box"><canvas aria-label="${c.title} chart" role="img"></canvas></div></figure>`);
     }
+    if (grp.detections) panel.insertAdjacentHTML("beforeend", DETECTIONS_CARD);
     panels.append(panel);
   }
 
@@ -170,17 +196,13 @@ export function createGraphs({ config, now, getUnit, onError }) {
       tab.tabIndex = on ? 0 : -1;
       document.getElementById(`panel-${grp.id}`).hidden = !on;
     }
-    // The health chart is always all time, so the range buttons are switched off there and say so.
-    const allTime = GROUPS.find((x) => x.id === id).allTime === true;
-    rangeGroup.querySelectorAll("button").forEach((b) => { b.disabled = allTime; });
-    document.getElementById("range-note").hidden = !allTime;
     redraw();
   }
 
   function setRange(id) {
     range = g.ranges.find((r) => r.id === id);
     rangeGroup.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.range === id)));
-    if (now() - range.ms < loadedSince) load(); else redraw();
+    if (now() - Math.max(range.ms, minLoadMs) < loadedSince) load(); else redraw();
   }
 
   // ----- Data -----
@@ -188,8 +210,9 @@ export function createGraphs({ config, now, getUnit, onError }) {
     if (!source || loading) return;
     clearTimeout(retryTimer);
     loading = true;
-    const since = now() - range.ms;
-    const limit = Math.min(9000, Math.ceil(range.ms / (g.historyIntervalS * 1000)) + 60);
+    const span = Math.max(range.ms, minLoadMs);
+    const since = now() - span;
+    const limit = Math.min(9000, Math.ceil(span / (g.historyIntervalS * 1000)) + 60);
     msg.textContent = "Loading history";
     try {
       const fetched = (await source.fetchHistory(since, limit)).filter((r) => r && isNum(r.ts)).sort((a, b) => a.ts - b.ts);
@@ -198,6 +221,7 @@ export function createGraphs({ config, now, getUnit, onError }) {
       loadedSince = since;
       retryMs = 2000;
       msg.textContent = records.length ? "" : "No readings in this range yet.";
+      onLoad?.();
     } catch (err) {
       msg.textContent = `Could not load history (${err.message}). Retrying in ${Math.round(retryMs / 1000)} s.`;
       onError?.(`History: ${err.message}`);
@@ -238,7 +262,10 @@ export function createGraphs({ config, now, getUnit, onError }) {
     const unit = getUnit();
     const t1 = now(), t0 = t1 - range.ms;
     const grp = GROUPS.find((x) => x.id === activeGroup);
-    if (grp.allTime) { drawHealth(Chart, unit); return; }
+    const inRange = grp.detections ? records.filter((r) => r.ts >= t0) : null;
+    const sp = grp.detections
+      ? { pass: spans(inRange, (r) => isNum(r.passElDeg), g.gapMs), det: spans(inRange, (r) => r.rfDetected === true, g.gapMs) }
+      : null;
     for (const c of grp.charts) {
       const card = document.querySelector(`[data-chart="${c.id}"]`);
       const unitLabel = c.unit === "temp" ? `°${unit}` : c.unit;
@@ -257,8 +284,43 @@ export function createGraphs({ config, now, getUnit, onError }) {
       chart.options.scales.x.max = t1;
       chart.options.scales.y.title.text = unitLabel;
       chart.$unit = unitLabel;
+      chart.$spans = c.shade ? sp : null;
+      chart.$guides = c.guides === true;
       chart.update("none");
     }
+    if (grp.detections) drawDetections(inRange);
+  }
+
+  function durationText(s, ongoing) {
+    if (ongoing) return "ongoing";
+    if (s < 60) return `${Math.round(s)} s`;
+    return `${Math.floor(s / 60)} min ${String(Math.round(s % 60)).padStart(2, "0")} s`;
+  }
+
+  function drawDetections(inRange) {
+    const log = detectionLog(inRange, g.gapMs);
+    const card = document.querySelector('[data-card="detections"]');
+    card.querySelector("[data-note]").textContent = log.length
+      ? `${log.length} in this range${log.length > 20 ? ", newest 20 shown" : ""}` : "";
+    const rows = log.slice(0, 20).map((d) => {
+      const tr = document.createElement("tr");
+      const start = new Date(d.startTs);
+      const cells = [
+        `${dayLabel(start)} ${fmtClock(start)}`,
+        durationText(d.durationS, d.ongoing),
+        isNum(d.peakExcess) ? `${d.peakExcess >= 0 ? "+" : ""}${d.peakExcess.toFixed(1)} dB` : "--",
+        fmt(d.peakRqs, 0),
+        d.inPass ? "yes" : "no",
+      ];
+      for (const text of cells) { const td = document.createElement("td"); td.textContent = text; tr.append(td); }
+      return tr;
+    });
+    if (!rows.length) {
+      const tr = document.createElement("tr"), td = document.createElement("td");
+      td.colSpan = 5; td.className = "empty"; td.textContent = "No detections in this range";
+      tr.append(td); rows.push(tr);
+    }
+    document.getElementById("det-rows").replaceChildren(...rows);
   }
 
   function chartConfig(c) {
@@ -268,21 +330,28 @@ export function createGraphs({ config, now, getUnit, onError }) {
       data: {
         datasets: c.series.map((s) => ({
           label: s.label, data: [], borderColor: s.color, backgroundColor: s.color,
-          borderWidth: s.width ?? 1.6, pointRadius: 0, pointHoverRadius: 3.5, pointHoverBorderWidth: 0,
-          spanGaps: false, tension: 0,
-        })),
+          borderWidth: s.width ?? 1.6, borderDash: s.dash ?? [], pointRadius: 0, pointHoverRadius: 3.5,
+          pointHoverBorderWidth: 0, spanGaps: false, tension: 0,
+        })).concat(c.shade ? [
+          // Legend entries for the shading; they hold no data.
+          { label: "Pass window", data: [], backgroundColor: SHADE.pass, borderColor: "transparent", borderWidth: 0 },
+          { label: "Detection", data: [], backgroundColor: SHADE.det, borderColor: "transparent", borderWidth: 0 },
+        ] : []),
       },
-      plugins: [crosshair],
+      plugins: [crosshair, shading, guides],
       options: {
         // Data redraws are instant; only the tooltip glides between readings.
         animation: { duration: 0 }, parsing: false, normalized: true, responsive: true, maintainAspectRatio: false,
         interaction: { mode: "timeEach", intersect: false },
         scales: {
           x: { type: "linear", ticks: { callback: tick, maxTicksLimit: 6, color: C.muted }, grid: { color: C.line } },
-          y: { title: { display: true, text: "", color: C.muted }, ticks: { color: C.muted }, grid: { color: C.line } },
+          y: { min: c.yMin, max: c.yMax, title: { display: true, text: "", color: C.muted }, ticks: { color: C.muted }, grid: { color: C.line } },
         },
         plugins: {
-          legend: { display: c.series.length > 1, labels: { color: C.muted, boxWidth: 12, boxHeight: 2 } },
+          legend: {
+            display: c.series.length > 1 || c.shade === true,
+            labels: { color: C.muted, boxWidth: 12, boxHeight: c.shade ? 8 : 2 },
+          },
           tooltip: {
             animation: { duration: 140, easing: "easeOutQuad" },
             position: "average",
@@ -297,106 +366,11 @@ export function createGraphs({ config, now, getUnit, onError }) {
     };
   }
 
-  // ----- Battery health (all time) -----
-  function drawHealth(Chart, unit) {
-    const card = document.querySelector('[data-chart="soh"]');
-    const t1 = now();
-    const s = healthSeries(healthRecords, t1);
-    msg.textContent = "";
-    card.querySelector("[data-note]").textContent = s.count
-      ? `All time, ${s.count} record${s.count === 1 ? "" : "s"}` : "No records yet: the first appears when a discharge ends";
-    let chart = charts.get("soh");
-    if (!chart) {
-      chart = new Chart(card.querySelector("canvas"), healthChartConfig());
-      charts.set("soh", chart);
-    }
-    const t0 = s.firstTs === null ? t1 - 7 * 86400e3 : Math.min(s.firstTs - 6 * 3600e3, t1 - 86400e3);
-    const ds = chart.data.datasets;
-    ds[0].data = s.hi; ds[1].data = s.lo; ds[2].data = s.fit; ds[3].data = s.full; ds[4].data = s.rest;
-    ds[5].data = [{ x: t0, y: 80 }, { x: t1, y: 80 }];
-    const ys = [...s.lo, ...s.full, ...s.rest].map((p) => p.y).filter(isNum);
-    chart.options.scales.x.min = t0;
-    chart.options.scales.x.max = t1;
-    chart.options.scales.y.min = Math.max(0, Math.floor(Math.min(60, ...ys) / 10) * 10);
-    chart.options.scales.y.max = 110;
-    chart.update("none");
-
-    const list = card.querySelector("#health-not-used");
-    const shown = s.notUsed.slice(0, 8).map((r) => notUsedText(r, unit));
-    if (s.notUsed.length > 8) shown.push(`and ${s.notUsed.length - 8} older`);
-    if (!shown.length) shown.push("None");
-    list.replaceChildren(...shown.map((t) => { const li = document.createElement("li"); li.textContent = t; return li; }));
-  }
-
-  function healthChartConfig() {
-    const band = { borderWidth: 0, pointRadius: 0, pointHitRadius: 0, stepped: true, spanGaps: false, label: "" };
-    const dayTick = function (v) {
-      const d = new Date(v);
-      return this.max - this.min < 2 * 86400e3 ? tick(v) : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-    };
-    return {
-      type: "line",
-      data: {
-        datasets: [
-          { ...band, data: [], fill: "+1", backgroundColor: "rgba(94, 224, 154, 0.14)" },
-          { ...band, data: [], fill: false },
-          { label: "Fit, shaded ±", data: [], borderColor: C.good, backgroundColor: C.good, borderWidth: 2,
-            stepped: true, spanGaps: false, pointStyle: "line", pointRadius: 0, pointHitRadius: 8, pointHoverRadius: 3 },
-          { label: "Discharge from full", data: [], showLine: false, pointStyle: "circle", pointRadius: 4.5,
-            pointHoverRadius: 6, pointHitRadius: 10, borderColor: C.accent, backgroundColor: C.accent },
-          { label: "Discharge from rest", data: [], showLine: false, pointStyle: "triangle", pointRadius: 5.5,
-            pointHoverRadius: 7, pointHitRadius: 10, borderColor: C.amber, backgroundColor: "transparent", borderWidth: 1.6 },
-          { label: "80% end of life (USABC)", data: [], borderColor: C.muted, backgroundColor: C.muted,
-            borderDash: [6, 4], borderWidth: 1.2, pointStyle: "line", pointRadius: 0, pointHitRadius: 0 },
-        ],
-      },
-      plugins: [eolLabel],
-      options: {
-        animation: { duration: 0 }, parsing: false, normalized: true, responsive: true, maintainAspectRatio: false,
-        interaction: { mode: "nearest", intersect: true },
-        scales: {
-          x: { type: "linear", ticks: { callback: dayTick, maxTicksLimit: 7, color: C.muted }, grid: { color: C.line } },
-          y: { title: { display: true, text: "SOH %", color: C.muted }, ticks: { color: C.muted }, grid: { color: C.line } },
-        },
-        plugins: {
-          legend: {
-            labels: { color: C.muted, usePointStyle: true, boxWidth: 10, boxHeight: 10, filter: (item) => item.text !== "" },
-          },
-          tooltip: {
-            filter: (item) => item.datasetIndex >= 2 && item.datasetIndex <= 4,
-            callbacks: {
-              title: (items) => {
-                const d = new Date(items[0].parsed.x);
-                return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${fmtClock(d)}`;
-              },
-              label: (item) => {
-                const p = item.raw;
-                if (item.datasetIndex === 2) return `Fit: ${p.y.toFixed(1)}% ±${(p.s ?? 0).toFixed(1)}`;
-                const r = p.r ?? {};
-                const extra = [isNum(r.e) ? `${r.e.toFixed(2)} Wh` : null, isNum(r.hours) ? `${r.hours.toFixed(1)} h` : null]
-                  .filter(Boolean).join(", ");
-                return `This discharge: ${p.y.toFixed(1)}%${extra ? ` (${extra})` : ""}`;
-              },
-            },
-          },
-        },
-      },
-    };
-  }
-
-  function setHealthRecords(list) {
-    healthRecords = list;
-    if (activeGroup !== "health") return;
-    clearTimeout(healthTimer);
-    healthTimer = setTimeout(redraw, 300);   // records arrive one by one on first load
-  }
-
   return {
     setSource(s) { source = s; load(); },
     noSource(text) { msg.textContent = text; redraw(); },
     addLive,
     redraw,
-    setHealthRecords,
     reload() { loadedSince = Infinity; load(); },
     get records() { return records; },
   };

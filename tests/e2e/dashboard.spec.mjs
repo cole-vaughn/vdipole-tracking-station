@@ -143,110 +143,121 @@ test("screenshots for review @screens", async ({ page }, info) => {
   await page.screenshot({ path: `tests/screenshots/${info.project.name}-first-view.png` });
 });
 
-// ---------- Battery health (SPEC 14.14) ----------
-const health = (page, h) => page.evaluate((x) => window.__fixture.setHealth(x), h);
+// ---------- Reception quality score (SPEC 14.14) ----------
+const scored = (over = {}) => ({
+  rqs: 57.3, rqsLabel: "GOOD", rqsTag: "PASS", rfExcessDb: 6.2, rfBaselineDbm: -75.1, rfThresholdDbm: -73.9,
+  rfSigmaDb: 0.3, rfDetected: true, passElDeg: 41.6, passCorr: 0.83, rqsTempC: 23.4,
+  rqsSnr: 0.52, rqsDet: 1, rqsPass: 0.93, rqsHealth: 1, battSocPct: 70, ...over,
+});
 
-test("battery health pill: estimate, low, learning, no data, offline", async ({ page }) => {
+test("RQS hero: every label, tag and flag", async ({ page }) => {
   await open(page);
-  const pill = page.locator("#soh-pill");
-  await expect(pill).toHaveAttribute("data-band", "good");
-  await expect(page.locator("#soh-text")).toHaveText("SOH 93% ±4");
-  await expect(page.locator("#soh-est")).toBeVisible();
+  const panel = page.locator("#rqs-panel");
+  await expect(panel).toHaveAttribute("data-state", "scored");     // the fixture opens mid-pass
 
-  await health(page, { battSohConf: "low", battSohPct: 71.4, battSohSigmaPct: 11.6 });
-  await expect(page.locator("#soh-text")).toHaveText("SOH 71% ±12");
-  await expect(pill).toHaveAttribute("data-band", "fair");
-  await expect(pill).toHaveAttribute("data-conf", "low");
-  await expect(pill).toHaveAttribute("aria-label", /fair, less runtime/);
+  await latest(page, scored());
+  await expect(page.locator("#rqs-num")).toHaveText("57");
+  await expect(page.locator("#rqs-label")).toHaveText("GOOD");
+  await expect(panel).toHaveAttribute("data-band", "good");
+  await expect(page.locator("#rqs-tag")).toHaveText("PASS");
+  await expect(page.locator("#rqs-tagwords")).toHaveText("in a predicted pass");
+  await expect(page.locator("#rqs-bar-snr")).toHaveText("0.52");
+  await expect(page.locator("#rqs-bar-pass")).toHaveText("0.93");
+  await expect(page.locator("#rqs-el")).toHaveText("42°");
+  await expect(page.locator("#rqs-corr")).toHaveText("0.83");
+  await expect(page.locator("#rqs-detected")).toBeVisible();
+  await expect(page.locator("#rqs-temp-na")).toBeHidden();
+  await expect(page.locator("#rf-excess")).toHaveText("+6.2");     // the S-meter follows the station's excess
+  await expect(page.locator("#rf-base")).toHaveText("-75.1 dBm");
 
-  await health(page, { battSohConf: "high", battSohPct: 52, battSohSigmaPct: 4 });
-  await expect(pill).toHaveAttribute("data-band", "replace");
+  for (const [rqs, label, band, tag] of [[3.1, "NO SIGNAL", "nosignal", "NO PASS"], [22.4, "WEAK", "weak", "NO SCHEDULE"],
+    [70, "STRONG", "strong", "NO PASS"], [91.5, "STRONG", "strong", "TEST"]]) {
+    await latest(page, scored({ rqs, rqsLabel: label, rqsTag: tag, passElDeg: null, passCorr: null }));
+    await expect(page.locator("#rqs-label")).toHaveText(label);
+    await expect(panel).toHaveAttribute("data-band", band);
+    await expect(page.locator("#rqs-tag")).toHaveText(tag);
+    await expect(page.locator("#rqs-el")).toHaveText("not in a pass");
+  }
 
-  await health(page, { battSohConf: "none", battSohPct: null, battSohSigmaPct: null, battSohProgressPct: 42 });
-  await expect(page.locator("#soh-text")).toHaveText("SOH learning 42%");
-  await expect(page.locator("#soh-est")).toBeHidden();
-  await expect(pill).toHaveAttribute("data-band", "none");
+  await latest(page, scored({ rqsTempC: null, battSocPct: null }));
+  await expect(page.locator("#rqs-temp-na")).toBeVisible();
+  await expect(page.locator("#rqs-batt-na")).toBeVisible();
 
-  await health(page, null);
-  await expect(page.locator("#soh-text")).toHaveText("SOH --");
+  await latest(page, scored({ rqs: null, rqsLabel: "WARMING UP", rfExcessDb: null, rfBaselineDbm: null, rfThresholdDbm: null,
+    rfSigmaDb: null, rfDetected: false, rqsSnr: null, rqsDet: null, rqsPass: null, rqsHealth: null }));
+  await expect(panel).toHaveAttribute("data-state", "warming");
+  await expect(page.locator("#rqs-num")).toHaveText("--");
+  await expect(page.locator("#rqs-label")).toHaveText("WARMING UP");
+  await expect(page.locator("#rqs-bar-health")).toHaveText("--");
+  await expect(page.locator("#rf-base")).toHaveText("learning");
+  await expect(page.locator("#rf-excess")).toHaveText("--");
 
-  await health(page, { battSohConf: "high", battSohPct: 93, battSohSigmaPct: 4 });
-  await expect(pill).toHaveAttribute("data-band", "good");
-  await latest(page, {}, { ageMs: 45_000 });
+  // A record from firmware before 1.2 has no RQS fields at all.
+  await latest(page, { rfFiltDbm: -75, rfRawDbm: -75.4, battSocPct: 60 }, { replace: true });
+  await expect(panel).toHaveAttribute("data-state", "none");
+  await expect(page.locator("#rqs-num")).toHaveText("--");
+  await expect(page.locator("#rqs-tag")).toHaveText("--");
+
+  await page.evaluate(() => window.__fixture.clearLatest());
+  await expect(page.locator("#rqs-num")).toHaveText("--");
+
+  await latest(page, scored(), { ageMs: 45_000 });
   await expect(page.locator("body")).toHaveAttribute("data-station", "offline", { timeout: 1500 });
-  await expect(pill).toHaveAttribute("data-band", "none");
-  await expect(page.locator("#soh-text")).toHaveText("SOH 93% ±4");
+  await expect(panel).toHaveAttribute("data-band", "none");          // grey while offline
+  await expect(page.locator("#rqs-num")).toHaveText("57");          // last value still readable
 });
 
-test("battery health pill with no health data at all", async ({ page }) => {
-  await open(page, "?autoplay=0&health=none");
-  await expect(page.locator("#soh-text")).toHaveText("SOH --");
-  await page.locator("#soh-pill").click();
-  await expect(page.locator("#soh-rows")).toContainText("no data from the station yet");
-});
-
-test("battery health panel opens and closes", async ({ page }, info) => {
+test("RQS: why this score opens, explains, and closes", async ({ page }) => {
   await open(page);
-  const pill = page.locator("#soh-pill"), panel = page.locator("#soh-panel");
-  await expect(panel).toBeHidden();
-  await pill.click();
-  await expect(panel).toBeVisible();
-  await expect(pill).toHaveAttribute("aria-expanded", "true");
-  await expect(panel).toContainText("not a lab capacity test");
-  await expect(panel).toContainText("Uncalibrated");
-  await expect(page.locator("#soh-rows")).toContainText("Wh of 26.6 Wh rated");
-  await expect(page.locator("#soh-rows")).toContainText("Last discharge");
+  await latest(page, scored({ rqs: 70, rqsLabel: "STRONG", rqsTag: "NO PASS", passElDeg: null, passCorr: null }));
+  const btn = page.locator("#rqs-why-btn"), why = page.locator("#rqs-why");
+  await expect(why).toBeHidden();
+  await btn.click();
+  await expect(why).toBeVisible();
+  await expect(btn).toHaveAttribute("aria-expanded", "true");
+  await expect(why).toContainText("can score at most 70");
+  await expect(why).toContainText("box air at the BMP388 board");
+  await expect(why).toContainText("compensation off (not measured yet)");
+  await latest(page, scored({ rqsTempC: null }));
+  await expect(why).toContainText("TEMP N/A");
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(0);
-
   await page.keyboard.press("Escape");
-  await expect(panel).toBeHidden();
-  await expect(pill).toHaveAttribute("aria-expanded", "false");
-
-  await pill.click();
-  await expect(panel).toBeVisible();
-  await page.locator("#fan-h").click();          // anywhere outside
-  await expect(panel).toBeHidden();
-
-  if (info.project.name === "desktop") {
-    await pill.hover();
-    await expect(panel).toBeVisible();
-    await page.mouse.move(5, 5);
-    await expect(panel).toBeHidden();
-  }
+  await expect(why).toBeHidden();
+  await expect(btn).toHaveAttribute("aria-expanded", "false");
 });
 
-test("battery health chart: all time, a break after a reset, discharges not used", async ({ page }, info) => {
+test("RQS sparkline, radio overlays, score chart and detection log", async ({ page }, info) => {
   await open(page);
-  await page.locator("#tab-health").click();
-  await expect(page.locator("#range-note")).toBeVisible();
-  await expect(page.locator('[data-range="1h"]')).toBeDisabled();
-  const sets = await page.waitForFunction(() => {
-    const c = window.Chart?.getChart(document.querySelector('[data-chart="soh"] canvas'));
+  await expect(page.locator("#rqs-spark-line")).toHaveAttribute("d", /^M[\d.]+ [\d.]+ L/);
+  await page.locator('[data-range="24h"]').click();
+  await page.locator("#tab-radio").click();
+  const rf = await page.waitForFunction(() => {
+    const c = window.Chart?.getChart(document.querySelector('[data-chart="rf"] canvas'));
     const d = c?.data.datasets;
-    return d && d[2].data.length > 5
-      ? { fitNulls: d[2].data.filter((p) => p.y === null).length, full: d[3].data.length, rest: d[4].data.length, eol: d[5].data[0].y }
+    return d && d[2].data.length > 100 && c.$spans
+      ? { sets: d.length, base: d[2].data.filter((p) => p.y !== null).length, thr: d[3].data.length,
+          pass: c.$spans.pass.length, det: c.$spans.det.length, labels: d.map((x) => x.label) }
       : null;
   });
-  const s = await sets.jsonValue();
-  expect(s.fitNulls).toBe(1);                    // the line breaks once, at the z reset
-  expect(s.full).toBe(6);
-  expect(s.rest).toBe(3);
-  expect(s.eol).toBe(80);
-  await expect(page.locator("#health-not-used li")).toHaveCount(4);
-  await expect(page.locator("#health-not-used")).toContainText("too cold");
-  await expect(page.locator("#health-not-used")).toContainText("learning reset (z)");
-
-  // A new record arrives live and shows up without a reload.
-  await page.evaluate(() => window.__fixture.addHealthLog({
-    ts: Date.now(), ok: true, start: "full", e: 20.1, sliceSohPct: 92.7, fitSohPct: 93.0, fitSigmaPct: 4.2, hours: 17,
-  }));
-  await page.waitForFunction(() =>
-    window.Chart.getChart(document.querySelector('[data-chart="soh"] canvas')).data.datasets[3].data.length === 7);
-
-  await page.locator("#tab-env").click();
-  await expect(page.locator('[data-range="1h"]')).toBeEnabled();
-  await expect(page.locator("#range-note")).toBeHidden();
+  const r = await rf.jsonValue();
+  expect(r.base).toBeGreaterThan(100);
+  expect(r.thr).toBeGreaterThan(100);
+  expect(r.pass).toBeGreaterThanOrEqual(3);   // the made-up passes in the last 24 h
+  expect(r.det).toBeGreaterThanOrEqual(3);    // three heard passes and one interference burst
+  expect(r.labels).toEqual(["Raw", "Filtered", "Baseline", "Threshold", "Pass window", "Detection"]);
+  const q = await page.waitForFunction(() => {
+    const c = window.Chart?.getChart(document.querySelector('[data-chart="rqs"] canvas'));
+    return c && c.data.datasets[0].data.length > 100 ? { max: c.options.scales.y.max, min: c.options.scales.y.min } : null;
+  });
+  expect(await q.jsonValue()).toEqual({ max: 100, min: 0 });
+  const rows = page.locator("#det-rows tr");
+  await expect(rows.first()).not.toContainText("No detections");
+  expect(await rows.count()).toBeGreaterThanOrEqual(3);
+  await expect(page.locator("#det-rows")).toContainText("yes");
+  await expect(page.locator("#det-rows")).toContainText("no");   // the burst outside any pass
+  await page.locator('[data-range="15m"]').click();
+  await expect(page.locator("#det-rows")).toContainText(/ongoing|yes/);   // the pass in progress
   expect(info.consoleProblems).toEqual([]);
 });
 
@@ -262,5 +273,6 @@ test("hover shows every series at the cursor's time", async ({ page }) => {
     const c = window.Chart.getChart(document.querySelector('[data-chart="rf"] canvas'));
     return c.tooltip.getActiveElements().map((a) => a.datasetIndex);
   });
-  expect(active.sort()).toEqual([0, 1]); // raw and filtered together, not hopping between them
+  // Raw, filtered, baseline and threshold together, not hopping between them.
+  expect(active.sort()).toEqual([0, 1, 2, 3]);
 });
