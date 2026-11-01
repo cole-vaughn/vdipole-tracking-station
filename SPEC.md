@@ -1,6 +1,6 @@
 # Satellite V-Dipole Tracking Station: Dashboard v2 Spec
 
-Status: v1 site built (section 13). Battery state of health (section 14) approved; S1 (logic and PC tests), S2 (firmware 1.1) and S3 (website) built, S4 (docs and report) in progress.
+Status: v1 site built (section 13). Battery state of health (section 14) built 2026-11-01 and tested on a PC and against fixtures; not yet run on the station.
 Last updated: 2026-11-01. This file replaces the draft PDF as the source of truth.
 
 Rules that apply to everything below:
@@ -221,7 +221,7 @@ Definition of done: all milestones complete, all tests pass and shown to Cole, n
 
 | ID | Item | Owner |
 |---|---|---|
-| O1 | Create the Firebase project, database and ESP32 user (firmware README steps 1 to 3). Tell the agent only the database host name. | Cole |
+| O1 | Create the Firebase project, database and ESP32 user (firmware README steps 1 to 3; the rules there now include `health` and `healthLog`). Tell the agent only the database host name. | Cole |
 | O2 | Names and Pages deploy approved 2026-10-31. Rename the local folder at handoff. | Cole |
 | O3 | Decided: Firebase JS SDK from a pinned CDN (server clock offset via `.info/serverTimeOffset`, built-in reconnect). | Done |
 | O4 | Logged charge test for the charging inference (section 7, F2). | Cole |
@@ -233,7 +233,7 @@ Definition of done: all milestones complete, all tests pass and shown to Cole, n
 | O10 | Decided: no new hardware. Internal resistance is not measured and not shown. | Done |
 | O11 | Default applied: the BMP388 air temperature gates slices (15 to 35 C). Cole can switch to the thermistor once it is verified. | Cole may change |
 | O12 | Decided: 80 / 60 bands; 80 cited (USABC), 60 marked as a project choice. | Done |
-| O13 | Hardware checks for SOH: INA219 calibration, charger full voltage, a few normal charge cycles (section 14.18). | Cole |
+| O13 | Hardware checks for SOH: INA219 calibration and voltage check, charger full voltage, a few normal charge cycles, `h` reports (section 14.18). | Cole |
 | O14 | Decided 2026-10-31: SOH plan approved. | Done |
 | O15 | RF: power the SAWbird from a stripped USB-C cable, then confirm the RF chain with a NanoVNA. The last hardware task. | Cole |
 
@@ -293,7 +293,7 @@ Built differently from the draft, on purpose:
 
 ## 14. Battery state of health (the course "go beyond" algorithm)
 
-Status: designed 2026-10-31 with Cole's answers (O9 to O12) and approved the same day. S1 built 2026-11-01: `firmware/station_firmware/soh.h` and its PC tests. S2 built the same day: firmware 1.1 uses it (compiled, not yet run on the station). S3 built the same day: the pill, panel and chart on the website, tested against labeled fixtures. S4 in progress (14.19). Details settled or changed while building S1 are marked "(S1)".
+Status: designed 2026-10-31 with Cole's answers (O9 to O12) and approved the same day. S1 built 2026-11-01: `firmware/station_firmware/soh.h` and its PC tests. S2 built the same day: firmware 1.1 uses it (compiled, not yet run on the station). S3 built the same day: the pill, panel and chart on the website, tested against labeled fixtures. S4 (these docs and the build report in 14.20) done the same day. Details settled or changed while building S1 are marked "(S1)".
 
 ### 14.1 What it is, and how it meets the course
 
@@ -509,6 +509,9 @@ Colors (O12, approved), never by color alone (the band name is in the panel and 
 - Charging is inferred. A missed charge would usually show up as a voltage rise and close the slice, but it can overcount cycles.
 - A 3S pack is limited by its weakest cell; the estimate is for the pack as a whole, which is what matters to the station.
 - Discharging below about 9.5 V is never needed, and the firmware never asks for it.
+- (S4) **Repeating errors are the main limit.** The voltage table, the resistance guess and the INA219 gain are the same in every slice, so more slices of the same kind do not make the estimate better; deeper discharges do (14.7). On the simulated pack every error was on the low side and stayed within about 1.2 times its plus-or-minus (14.8).
+- (S4) Every accuracy number in this section comes from a simulated pack in the PC tests, not from the real one. The real pack's curve, resistance and charger behaviour are unknown until the tests in 14.18 are done.
+- (S4) A full start assumes the charger tops the pack off within 20 minutes of reaching 12.54 V (`SOH_FULL_HOLD_S`, PLACEHOLDER). A charger that stops early makes every slice that starts from full read a little low.
 
 ### 14.17 References (each checked on 2026-10-31)
 
@@ -525,10 +528,13 @@ Not cited: IEC 61960-3 (paywalled, could not be checked).
 
 1. INA219 two-point calibration against a meter in series (sets the gain and offset; every SOH number depends on it).
 2. Measure the charger's full voltage at the jack. Full anchors assume about 12.6 V; below 12.54 V they never trigger.
-3. Normal use for a few charge cycles: check that `healthLog` gets one record per discharge and the plus-or-minus shrinks.
+3. Normal use for a few charge cycles: check that `healthLog` gets one record per discharge, and that the plus-or-minus shrinks after deeper discharges.
 4. Plug the charger in partway through a discharge: the slice should close at its last good anchor.
 5. Power-cycle with the button during a discharge: the slice should close at its saved anchor and a new one start.
 6. Confirm the BMP388 reads sensible air temperature.
+7. (S4) Compare the INA219 battery voltage with a meter at the pack, a few times. The anchors read the voltage table, so an offset of 30 mV on the pack (10 mV per cell) can move an anchor by a few points.
+8. (S4) During a charge with the station on, run `h`: it shows "held full x of 20 min". If it never reaches 20, the charger stops early or holds below 12.54 V (test 2).
+9. (S4) After the first day of normal use, run `h` while discharging: "anchor check now" should say "ok" most of the time. If "current not steady" or "voltage rising" keeps showing, the rest-point thresholds need tuning for this station.
 
 ### 14.19 Plan (after approval)
 
@@ -539,4 +545,24 @@ One local commit per step, after Cole approves this section.
 | S1 | `soh.h` pure logic, synthetic curve generator, C++ tests | All firmware tests pass on the PC. Done 2026-11-01: 137 checks pass with clang and GCC, and `soh.h` compiles for the ESP32 with all warnings on and none reported. |
 | S2 | Firmware: INA219 averaging, SOH wiring, persistence, `h` and `z`, health uploads, version 1.1 | Compiles with no new warnings; secret scan passes. Done 2026-11-01: 1,112,128 bytes of flash (84%), 55,424 bytes of RAM (16%), no warnings from the sketch or `soh.h`. The battery estimate now shares the voltage table and the 0.25 ohm placeholder with `soh.h`. Not run on the station. |
 | S3 | Website: data source, pill and panel, health chart tab, fixtures | Unit and Playwright tests pass at both sizes, no console errors. Done 2026-11-01: 23 unit tests and 32 browser tests pass (4 new browser tests at both sizes); no console errors; no sideways scroll with the panel open on a 360 px phone. |
-| S4 | Docs: README, firmware README, this section marked built; final report | Report lists what was verified, what was not, and the accuracy limits |
+| S4 | Docs: README, firmware README, this section marked built; final report | Report lists what was verified, what was not, and the accuracy limits. Done 2026-11-01: see 14.20. |
+
+### 14.20 Build report (2026-11-01)
+
+**Verified:**
+
+- The logic in `soh.h`: 137 checks on a simulated pack (SYNTHETIC), with clang on the Mac and with GCC; listed in 14.15. A full discharge of the simulated pack at 94% SOH gave 92.9 plus or minus 3.8.
+- Firmware 1.1 compiles for the ESP32 with no warnings from the sketch or `soh.h`: 1,112,128 bytes of flash (84%), 55,424 bytes of RAM (16%).
+- The website: 23 unit tests and 32 browser tests (desktop and 360 px phone) against labeled fixtures, including every pill state, the panel, the chart with a reset break, and no console errors.
+- The three references (14.17), checked on 2026-10-31.
+
+**Not verified (needs the station, 14.18):**
+
+- Nothing in 1.1 has run on the ESP32: INA219 averaging, flash saves, uploads, `h` and `z`.
+- The real pack's curve and resistance, the charger's full voltage and how long it holds it, and the BMP388 as the temperature gate.
+- The INA219 is uncalibrated, so every energy number carries its gain error, and the website says so.
+- The live data source has only been syntax-checked: there is no Firebase project yet (O1), so `/station/health` and `/station/healthLog` have never been read for real.
+
+**Changed from the approved design while building** (each marked S1 or S3 above): the plus-or-minus no longer shrinks for repeated slices of the same kind (a flaw found by the tests); a pack-change rule for 3 outliers in a row; the full anchor needs 20 minutes at full voltage; the simulated curves are made while the tests run instead of stored; the accuracy table in 14.8 now comes from the simulation; the health log is read with one listener instead of repeated fetches; `sohState` saves the cycle count every 30 minutes instead of 5.
+
+**Accuracy limits:** 14.16.
