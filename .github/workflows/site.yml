@@ -27,7 +27,7 @@ jobs:
       - run: npm ci
       - name: Secret scan
         run: npm run scan
-      - name: Firmware logic tests (battery health, on the PC)
+      - name: Firmware logic tests (reception quality score, on the PC)
         run: npm run test:firmware
       - name: Unit tests
         run: npm run test:unit
@@ -58,6 +58,8 @@ jobs:
           node-version: 22
       - name: Refresh orbit data (keeps the committed copy if CelesTrak fails)
         run: node tools/fetch-orbit.mjs || echo "::warning::CelesTrak fetch failed; deploying the committed orbit data"
+      - name: Pass schedule for the station (next 48 h; none if the orbit data is too old)
+        run: node tools/make-passes.mjs || echo "::warning::No pass schedule made; the station will tag scores NO SCHEDULE"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -15,3 +15,6 @@ tests/screenshots/
 
 # Local Claude Code skills (third-party, see .claude/skills/SOURCES.md); not part of the project
 .claude/
+
+# Made by the deploy workflow (tools/make-passes.mjs); expires after 48 h, so it is never committed.
+site/data/passes.json
