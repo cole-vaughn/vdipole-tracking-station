@@ -7,7 +7,7 @@ export const CONFIG = {
   // Firebase Realtime Database URL, for example "https://your-project-default-rtdb.firebaseio.com".
   // Public by design (the database allows public read). Empty until the Firebase project exists;
   // the page then shows a calm "not connected yet" state instead of errors.
-  databaseURL: "",
+  databaseURL: "https://vdipole-tracking-station-default-rtdb.firebaseio.com",
 
   // Rounded to two decimals (about 1 km) on purpose. Never put a street address here.
   station: { label: "Station", lat: 33.92, lon: -84.84, altKm: 0.3 },
