@@ -1,23 +1,31 @@
-# Station firmware 1.1
+# Station firmware 1.2
 
 Single-sketch firmware for the Satellite V-Dipole Tracking Station (ESP32 DOIT DevKit V1, ELEE 4230/6230).
 It reads every sensor, drives the LCD, and uploads to Firebase Realtime Database.
 
-**Status: version 1.1 compiles cleanly (2026-11-01) and has not run on the station yet.** Walk through the test checklist
-at the bottom. Nothing here has been measured on the finished enclosure, so every value marked `PLACEHOLDER` in the
-sketch or in `soh.h` is a guess until it is measured.
+**Status (2026-11-01): version 1.2 compiles cleanly and has not run on the station yet.** The score logic in `rqs.h`
+is tested on a PC (`npm run test:firmware`, 142 checks with SYNTHETIC inputs); the sketch around it has only been
+compiled. Nothing here has been measured on the finished enclosure, so every value marked `PLACEHOLDER` in the sketch
+or in `rqs.h` is a guess until it is measured. Walk through the test checklist at the bottom.
 
-**New in 1.1:** battery state of health (SOH) learned from normal use, and INA219 averaging. The design is `SPEC.md`
-section 14. The logic in `soh.h` is tested on a PC with a simulated pack (`npm run test:firmware`, 137 checks); the
-sketch around it has only been compiled.
+**New in 1.2:**
+
+- The reception quality score (RQS), the course "go beyond" algorithm: one 0 to 100 score from the RF reading
+  (baseline, detection, pass match, health). Logic in `rqs.h`, tested on a PC. Design: `SPEC.md` section 14.
+- NTP time and a pass schedule fetched from the website every 6 hours.
+- Five LCD pages (RF and RQS first), per Cole (`SPEC.md` 15.1).
+- Two calibration sketches, for the capacitive sensor and the thermistor (`SPEC.md` 15.2).
+- Battery state of health (1.1) is removed. The INA219 averaging from 1.1 stays.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `station_firmware/station_firmware.ino` | The whole firmware. Open this folder in the Arduino IDE (the folder name must match the sketch name). |
-| `station_firmware/soh.h` | Battery health logic as plain C++ with no Arduino headers, so the same file is tested on a PC (`tests/firmware/`). It also holds the voltage table the battery estimate uses. |
-| `station_firmware/secrets.example.h` | Template for credentials. Copy to `secrets.h` in the same folder and fill in. |
+| `station_firmware/station_firmware.ino` | The whole station firmware. Open this folder in the Arduino IDE (the folder name must match the sketch name). |
+| `station_firmware/rqs.h` | Reception quality score logic as plain C++ with no Arduino headers, so the same file is tested on a PC (`tests/firmware/`). All its constants are at the top. |
+| `station_firmware/secrets.example.h` | Template for credentials and the pass schedule address. Copy to `secrets.h` in the same folder and fill in. |
+| `cal_capacitive/cal_capacitive.ino` | Calibration sketch for the touch pad: prints the `CAP_...` constants to paste into the station sketch. |
+| `cal_thermistor/cal_thermistor.ino` | Calibration sketch for the thermistor: prints `THERM_R0`, `THERM_BETA`, `THERM_OFFSET_C`. |
 | `.gitignore` | Keeps `secrets.h` and build output out of git. |
 | `README.md` | This file. |
 
@@ -31,13 +39,15 @@ and regenerate the ThingSpeak write key.
 - Libraries (Library Manager): Adafruit BMP3XX, Adafruit INA219 (accept the BusIO and Unified Sensor dependencies).
 - Built in: Wire, LiquidCrystal, WiFi, WiFiClientSecure, HTTPClient, Preferences.
 - Serial Monitor: 115200 baud.
-- Verified build (2026-11-01, version 1.1): arduino-esp32 core 3.3.12, Adafruit BMP3XX 2.1.6, Adafruit INA219 1.2.3,
+- Verified build (2026-11-01, version 1.2): arduino-esp32 core 3.3.12, Adafruit BMP3XX 2.1.6, Adafruit INA219 1.2.3,
   Adafruit BusIO 1.17.4, Adafruit Unified Sensor 1.1.15, LiquidCrystal 1.0.7. Board "DOIT ESP32 DEVKIT V1".
-  Result: 1,112,128 bytes of flash (84%), 55,424 bytes of RAM (16%). With all warnings on, the sketch and `soh.h` give
-  none; the only warnings are inside the Adafruit INA219 library itself.
+  Result: 1,110,588 bytes of flash (84%), 60,920 bytes of RAM (18%). With all warnings on, the sketch and `rqs.h` give
+  none; the only warnings are inside the Adafruit INA219 library itself. The two calibration sketches compile the same
+  way (about 290 and 325 KB).
 - Command-line build (optional): `arduino-cli compile --fqbn esp32:esp32:esp32doit-devkit-v1 firmware/station_firmware`
-  (needs `secrets.h` in that folder). If arduino-cli says `LiquidCrystal.h` is missing, run
-  `arduino-cli lib install "LiquidCrystal"`; the Arduino IDE already includes it.
+  (needs `secrets.h` in that folder). If it cannot find the Adafruit headers, add
+  `--libraries ~/Documents/Arduino/libraries` (where the Arduino IDE installs them). If it says `LiquidCrystal.h` is
+  missing, run `arduino-cli lib install "LiquidCrystal"`; the Arduino IDE already includes it.
 - If the compiler complains about `portENTER_CRITICAL` or the `soc/gpio_reg.h` register names, the arduino-esp32 major
   version changed an API. Fix it there; the intent is "poll GPIO16 with interrupts off on this core while timing".
 
@@ -51,7 +61,7 @@ and regenerate the ThingSpeak write key.
 | BLOCK_R | 12 | HIGH blocks the RF channel. **Strapping pin**: nothing may pull it HIGH at boot |
 | Cap drive | 4 | Square wave out, through the 0.97 MOhm resistor |
 | Cap comparator | 16 | LM339 output in, 10k pull-up to 3.3 V on the board |
-| Fan tach | 18 | **New.** Tach wire (dashed on this fan) through a 10k series resistor; 10k pull-up to 3.3 V on the fan side (see below) |
+| Fan tach | 18 | Tach wire (dashed on this fan) through a 10k series resistor; 10k pull-up to 3.3 V on the fan side (see below) |
 | LCD RS, E, D4 to D7 | 27, 26, 25, 33, 14, 13 | 4-bit mode |
 
 ## Before connecting the fan tach wire (do this first)
@@ -87,37 +97,68 @@ touched to 3.3 V. So the tach never drives the line high by itself: it is open c
 ## Behaviour summary
 
 - **Every 2 s:** read BMP388, thermistor and RF through the mux (Kalman filtered), INA219, update the battery estimate,
-  compute fan RPM, refresh the shared snapshot.
+  run one RQS step, compute fan RPM, refresh the shared snapshot.
 - **Every 100 ms:** capacitive sensor. A confirmed press increments the counter and advances the LCD page. A press or
-  release triggers an immediate write to `/station/touch`.
+  release triggers an immediate write to `/station/touch`. The INA219 is also read every 100 ms.
 - **Upload task (core 0, 16 KB stack):** signs in to Firebase Auth, then writes `/station/latest` every 2 s,
-  `/station/history` every 10 s, `/station/touch` on a press or release, `/station/meta` once per boot,
-  `/station/health` at most once a minute when it changed, and a `/station/healthLog` record when a slice closes
-  (retried every 10 s until it is sent; the flag is saved, so a restart does not send it twice). The
-  capacitive timing runs on core 1 with interrupts off, so WiFi and TLS work cannot disturb it.
+  `/station/history` every 10 s, `/station/touch` on a press or release, and `/station/meta` once per boot. Every 6 hours
+  (15 minutes after a failure) it also fetches the pass schedule (`PASSES_URL`). The capacitive timing runs on core 1
+  with interrupts off, so WiFi and TLS work cannot disturb it.
+- **Clock:** NTP (`pool.ntp.org`, `time.nist.gov`), UTC. Until it is set, the RQS tags every score NO SCHEDULE.
 - **Battery:** energy counting in watt-hours against 26.6 Wh x 0.90, a voltage-based correction used only near full and
   near empty, a smoothed power average for the time left, and the remaining energy saved to flash every 5 minutes.
 - **INA219 averaging:** the chip averages 128 samples per reading, the sketch reads it every 100 ms and averages each
   2 s window, so random WiFi bursts no longer look like current noise. The library has no call for this, so the sketch
-  writes the config register itself, and checks it every 2 s in case a sharp load reset the chip (`h` shows the count).
-- **Battery health:** learns from normal use, no special procedure. Each discharge is one "slice" (energy used versus
-  how far the voltage moved); a weighted total least squares fit over the last 32 slices gives an SOH score with a
-  plus-or-minus. Temperature comes from the BMP388 (`SOH_TEMP_FROM_THERMISTOR 1` switches to the thermistor once it is
-  verified). Written to `/station/health` and `/station/healthLog`. The Serial print every 2 s has a `Health` line.
-  See `SPEC.md` section 14.
-- **BMP388 missing:** not fatal. The sketch keeps running and the BMP388 fields are sent as `null`.
+  writes the config register itself, and checks it every 2 s in case a sharp load reset the chip (`q` shows the count).
+- **Reception quality score:** see the next section.
+- **BMP388 missing:** not fatal. The sketch keeps running, the BMP388 fields are sent as `null`, and the RQS runs without
+  temperature (compensation off, temperature factor 1).
+
+## Reception quality score (RQS)
+
+Full design and reasons: `SPEC.md` section 14. In short, once per 2 s sample:
+
+1. **Temperature (BMP388 only, never the thermistors).** A raw sample is rejected if the BMP388 is missing, the read
+   failed, it is outside -20 to 85 C, or it jumped more than 5 C since the previous sample. Good samples are smoothed with
+   a 60 s filter. rf_comp = rfFiltDbm - ALPHA_T x (T - 25 C). ALPHA_T is 0 until the warm-up test.
+2. **Baseline (causal OS-CFAR).** A 15 minute ring of rf_comp (450 samples). The newest 30 s are a guard window and are
+   left out. baseline = 20th percentile of the rest; sigma = 1.4826 x MAD, at least 0.3 dB. The ring stops taking samples
+   while a detection is on, and starts again 60 s after it clears (or after 15 minutes at most). No score for the first
+   5 minutes after a start ("WARMING UP").
+3. **Detection.** threshold = baseline + 4 x sigma. Detected after 3 samples in a row above it; cleared after 3 in a row
+   below baseline + 3 x sigma.
+4. **Parts.** S_snr = (rf_comp - baseline) / 12 dB; S_det = 1 while detected. Both 0 to 1.
+5. **Pass match.** Inside a pass window from the schedule, the excess is compared with the free-space power curve
+   E = -20 log10(r(el) / 820 km) by a Pearson correlation r (at least 10 samples). S_pass = 0.4 + 0.6 x clamp((r - 0.3) / 0.6)
+   in a pass, 0 outside one, 0.5 with no valid schedule or in TEST MODE.
+6. **Health.** H_batt: 1 at 20% charge or more, down to 0.5 at 0% (1 if the charge is unknown). H_temp: 1 up to 45 C, down
+   to 0.7 at 60 C and above (1 when the BMP388 sample was rejected). H = H_batt x H_temp.
+7. **Score.** RQS = 100 x H x (0.50 S_snr + 0.20 S_det + 0.30 S_pass x S_det), 0 to 100. The pass part counts only
+   while something is detected, so plain noise never scores above NO SIGNAL (found in the PC tests, `SPEC.md` 14.10).
+   Under 15 NO SIGNAL, 15 to 40 WEAK, 40 to 70 GOOD, 70 and above STRONG. Tag: PASS, NO PASS, NO SCHEDULE or TEST. A strong signal outside a pass scores at
+   most 70 and is tagged NO PASS, on purpose: it is more likely interference.
+
+Nothing of the RQS is saved to flash; after a restart it learns the baseline again in 5 minutes.
+
+### Pass schedule
+
+The website's deploy workflow writes `data/passes.json` every 6 hours: the next 48 hours of Meteor-M2-4 passes above
+5 degrees for the rounded station location, from SGP4. The station fetches it over HTTPS with certificate checking (the
+core's built-in certificate bundle) and keeps it in RAM. Set `PASSES_URL` in `secrets.h` once Pages is enabled, for
+example `https://<github user>.github.io/vdipole-tracking-station/data/passes.json`. Empty means "no schedule": every score
+is then tagged NO SCHEDULE.
 
 ### LCD pages (a capacitive press goes to the next page)
 
+At power on the LCD shows page 0. After page 4 it returns to page 0.
+
 | Page | Content |
 |---|---|
-| 0 | BMP388 temperature, pressure, altitude |
-| 1 | Thermistor raw and filtered |
-| 2 | RF raw and filtered (dBm) |
-| 3 | Capacitive delay, delta, pressed state |
-| 4 | Battery voltage, current, power, peak current |
-| 5 | Battery percent, Wh left, time left |
-| 6 | Fan RPM, WiFi and Firebase status |
+| 0 | RF filtered dBm and dB above baseline; RQS with its label and tag taking turns every 2 s |
+| 1 | Temperatures: BMP388 and thermistor |
+| 2 | Pressure and altitude (BMP388) |
+| 3 | Fan RPM and its state |
+| 4 | Battery current, charge and time left |
 
 ### Serial commands
 
@@ -130,8 +171,9 @@ touched to 3.3 V. So the tach never drives the line high by itself: it is open c
 | `f` | Battery is full now (use right after a full charge) |
 | `r` | Reset the peak current |
 | `x` | Clear the saved battery value (reboot to restart from the voltage reading) |
-| `h` | Battery health report: fit result, stored slices, the open slice, which anchor check fails right now |
-| `z` | Reset all battery health state (for a new pack). Type `y` within 10 s to confirm; anything else cancels |
+| `t` | Toggle RQS TEST MODE (pass part fixed at 0.5, tag TEST; for the NanoVNA demo). Not saved: a restart ends it |
+| `q` | RQS report: baseline, sigma, threshold, freeze state, each part, the schedule and the clock |
+| `w` | Toggle the warm-up CSV (`WARM,ms,rfFilt,rfRaw,tempRaw,tempSmooth,rfComp`) for fitting ALPHA_T |
 
 ## Firebase setup (Spark plan, no card needed)
 
@@ -153,11 +195,6 @@ touched to 3.3 V. So the tach never drives the line high by itself: it is open c
         ".read": "query.orderByChild == 'ts' && query.limitToLast <= 9000",
         ".indexOn": ["ts"]
       },
-      "health": { ".read": true },
-      "healthLog": {
-        ".read": "query.orderByChild == 'ts' && query.limitToLast <= 500",
-        ".indexOn": ["ts"]
-      },
       ".write": "auth != null && auth.token.email == 'esp32@example.com'"
     }
   }
@@ -173,13 +210,14 @@ identifies the project and is not a secret by itself, which is why the write rul
 
 ## Data contract
 
-All keys live under `/station`. `null` means "sensor unavailable"; NaN is never sent. `ts` is the Firebase server time in
-milliseconds since the epoch (`{".sv":"timestamp"}`), so the website computes data age as `Date.now() - latest.ts`.
+All keys live under `/station`. `null` means "sensor unavailable" or "not known yet"; NaN is never sent. `ts` is the
+Firebase server time in milliseconds since the epoch (`{".sv":"timestamp"}`), so the website computes data age as
+`Date.now() - latest.ts`.
 
 | Key | Unit | Source |
 |---|---|---|
 | `ts` | ms epoch | Server timestamp |
-| `tempC` | deg C | BMP388 |
+| `tempC` | deg C | BMP388, raw `bmp.temperature` (no offset added) |
 | `pressHPa` | hPa | BMP388 |
 | `altM` | m | BMP388 (sea level 1013.25 hPa) |
 | `thermRaw`, `thermFilt` | deg C | Thermistor chain raw and Kalman filtered |
@@ -199,34 +237,28 @@ milliseconds since the epoch (`{".sv":"timestamp"}`), so the website computes da
 | `fanRpm`, `fanStalled` | RPM, bool | Tach (`null` RPM when `FAN_ENABLED` is 0) |
 | `rssi` | dBm | WiFi signal |
 | `uptimeS` | s | Seconds since boot |
+| `rqs` | 0 to 100 or null | Reception quality score, one decimal. Null while warming up |
+| `rqsLabel` | text | `NO SIGNAL`, `WEAK`, `GOOD`, `STRONG`, or `WARMING UP` |
+| `rqsTag` | text | `PASS`, `NO PASS`, `NO SCHEDULE`, or `TEST` |
+| `rfExcessDb` | dB or null | Compensated RF minus the baseline |
+| `rfBaselineDbm` | dBm or null | OS-CFAR baseline (20th percentile of the training cells) |
+| `rfThresholdDbm` | dBm or null | Baseline + K x sigma |
+| `rfSigmaDb` | dB or null | 1.4826 x MAD, at least 0.3 |
+| `rfDetected` | bool | Detection state |
+| `passElDeg` | deg or null | Expected satellite elevation now, only inside a pass window |
+| `passCorr` | -1 to 1 or null | Pearson r between excess and the expected power, over the pass so far |
+| `nextPassEpoch` | Unix s or null | Start of the next pass that has not begun |
+| `rqsTempC` | deg C or null | The smoothed BMP388 temperature the score used; null when the sample was rejected |
+| `rqsSnr`, `rqsDet`, `rqsPass`, `rqsHealth` | 0 to 1 or null | The four parts. **In `latest` only**, not in history |
 
 Other paths:
 
-- `/station/history/<pushId>`: same fields as `latest`, one record every 10 s.
+- `/station/history/<pushId>`: the same fields as `latest` except the four RQS parts, one record every 10 s.
 - `/station/touch`: `{ state, count, ts }`, written the moment the press state changes.
-- `/station/meta`: `{ fw, bootTs }`, once per boot.
+- `/station/meta`: `{ fw, bootTs, rqsAlphaT }`, once per boot. `rqsAlphaT` is the temperature compensation in use
+  (dB per C, 0 until the warm-up test), so the website can say whether compensation is on.
 
-### Battery health nodes (layout approved by Cole)
-
-`/station/health`, overwritten at most once a minute when something changed and right after a slice closes:
-
-| Key | Unit | Meaning |
-|---|---|---|
-| `ts` | ms epoch | Server timestamp of this write |
-| `battSohPct` | % or null | SOH from the fit, raw (may exceed 100; the website shows at most 100). Null while confidence is `none` |
-| `battSohSigmaPct` | points or null | Its plus-or-minus |
-| `battSohConf` | text | `none` (no usable slice yet), `low` (plus-or-minus above 6), `high` (6 or less) |
-| `battCapWhEst` | Wh or null | Fitted usable energy |
-| `battCycles` | count | Equivalent full cycles (discharged Wh / 26.6) |
-| `battSohSlices` | count | Slices in the fit |
-| `battSohProgressPct` | % | Progress of the open slice toward being usable; 100 once usable. The first half fills during the 60 min settle time, the second as the slice grows |
-| `battSohLearn` | text | `waiting`, `discharging`, or `charging` |
-| `inaCal` | bool | False while the INA219 gain and offset are placeholders |
-
-`/station/healthLog/<pushId>`, one record per closed slice, accepted or rejected: `ts`, `ok`, `why` (reason when
-rejected or an outlier), `start` (`full` or `rest`), `e` (Wh), `ah`, `x` (energy-percent points), `sx` (its
-uncertainty), `sliceSohPct`, `fitSohPct`, `fitSigmaPct`, `tempC`, `hours`. A `z` reset adds one record with `why`
-"reset" and no values. The full list of `why` texts is in `SPEC.md` section 14.12.
+The battery health nodes of 1.1 (`/station/health`, `/station/healthLog`) are gone.
 
 ### Flash (Preferences) keys
 
@@ -235,50 +267,43 @@ All in the namespace `station`. Keys are at most 15 characters (an NVS limit).
 | Key | Type | Holds | Written |
 |---|---|---|---|
 | `remWh` | float | Energy left for the battery estimate | every 5 min if it moved 0.05 Wh |
-| `sohState` | blob, about 57 bytes | Cycle energy, recent outliers, the last slice result and whether it was sent (the fit is recomputed from the slices) | when a slice closes or its record is sent; otherwise at most every 30 min if the cycle energy moved |
-| `sohSlices` | blob, up to 550 bytes | The last 32 accepted slices | when a slice closes |
-| `sohOpen` | blob, about 140 bytes | The slice in progress and its best end point, so a reboot does not lose it | when its start point is found, then at most every 5 min |
 
-Each blob carries a version byte and a CRC, so an old or corrupt value resets cleanly. `z` clears all three.
+The RQS keeps nothing in flash.
 
-### Size and cost (measured 2026-10-31 from a representative payload: 417 bytes, about 441 stored)
+### Size and cost (measured 2026-11-01 from the firmware's JSON in the PC tests, on top of the 417 byte record of 2026-10-31)
 
 | Item | Amount |
 |---|---|
-| History growth | about 3.8 MB per day (one record per 10 s), so the 1 GB Spark limit lasts about 262 days |
-| Live listener | about 18 MB per day per browser tab left open, about 0.54 GB per month |
-| Battery health (separate nodes) | about 0.01 MB per day stored; at most 0.33 MB per day per open tab |
+| History record | about 637 bytes (about 661 stored); `latest` about 697 bytes |
+| History growth | about 5.7 MB per day (one record per 10 s), so the 1 GB Spark limit lasts about 175 days |
+| Live listener | about 30 MB per day per browser tab left open, about 0.9 GB per month |
+| Pass schedule | about 1.6 to 1.8 KB per fetch, 4 a day, from GitHub Pages (no Firebase cost) |
 | Spark limits | 100 simultaneous connections, 1 GB stored, 10 GB per month downloaded |
 
 The history grows without bound. The website reads at most 24 h of it (an `orderByChild("ts")` query with
 `limitToLast`), and v1 has no pruning job (no admin credential anywhere). Delete old history by hand in the Firebase
-console before it nears 1 GB (roughly 7 to 9 months). See the main README for the steps.
+console before it nears 1 GB (roughly 5 to 6 months). See the main README for the steps.
 
 ## Placeholders still to measure
 
-Search the sketch for `PLACEHOLDER`. The important ones:
+Search the sketch and `rqs.h` for `PLACEHOLDER`. The important ones:
 
 | Value | What to do |
 |---|---|
 | `MUX_RDS_ON_OHMS`, `MUX_GAIN_T_MEASURED`, `MUX_GAIN_R_MEASURED` | Run `m`, compare each pin voltage to a multimeter at the sensor outputs |
 | `BATT_USABLE_FRACTION` (0.90), `BATT_R_INT_OHM` (0.25) | Check after a full discharge cycle |
 | `INA219_CURRENT_GAIN`, `INA219_CURRENT_OFFSET_MA` | Two-point calibration against a reference meter in series, then set `INA219_CALIBRATED` to 1 |
-| `CAP_VS`, `CAP_VREF`, `CAP_T_COMP_US` | Measure the GPIO high level and CAP_REF with a meter |
-| `CAP_TD_OFFSET_US`, `CAP_PF_SLOPE_CAL`, `CAP_PF_OFFSET_CAL` | Fit with known test capacitors (so `capPF` becomes meaningful) |
-| `CAP_PRESS_DELTA_US` (27), `CAP_RELEASE_DELTA_US` (18) | Re-tune with `b` and `s` after the enclosure, longer wires and foil pad are in |
-| `BMP388_CALIBRATION_OFFSET` (96.2) | CP3-era offset between the thermistor and the BMP388. Re-check with the mux in the path |
-| In `soh.h`: `SOH_TABLE_SIGMA_MV` (15), `SOH_RINT_SIGMA_OHM` (0.1), `SOH_E_SIGMA_PCT` (2), `SOH_E_SIGMA_WH` (0.02), `SOH_FLOOR_PCT` (3) | Uncertainties used to weigh each slice and the floor for the generic voltage table. Revisit after the INA219 calibration and a few charge cycles |
-| In `soh.h`: `SOH_FULL_V` (12.54), `SOH_FULL_HOLD_S` (1200), `SOH_CUTOFF_V` (9.5), `SOH_R_INT_OHM` (0.25, also used by the battery estimate) | Full detection (charger full voltage, held 20 min) and the low end anchor. Check against the real charger and pack |
-
-The INA219 gain and offset matter most for battery health: every watt-hour scales with the gain. Until they are
-measured, the website marks the health numbers "uncalibrated".
+| `CAP_VS`, `CAP_VREF`, `CAP_T_COMP_US`, `CAP_TD_OFFSET_US`, `CAP_PF_SLOPE_CAL`, `CAP_PF_OFFSET_CAL`, `CAP_PRESS_DELTA_US` (27), `CAP_RELEASE_DELTA_US` (18) | Run `cal_capacitive` and paste what it prints |
+| `THERM_R0`, `THERM_BETA`, `THERM_OFFSET_C` (96.2, the old CP3 offset, renamed from `BMP388_CALIBRATION_OFFSET`: it was always added to the thermistor, never to the BMP388) | Run `cal_thermistor` and paste what it prints |
+| In `rqs.h`: `RQS_ALPHA_T_DB_PER_C` (0) | Warm-up test (`docs/rqs-validation.md`, test b) with the `w` CSV |
+| In `rqs.h`: `RQS_K` (4), `RQS_D_FULL_DB` (12), `RQS_SIGMA_MIN_DB` (0.3), the weights (0.50, 0.20, 0.30), the label lines (15, 40, 70) and the rest of the table in `SPEC.md` 14.11 | Revisit after the NanoVNA test and a few real passes |
 
 The old CP4 report numbers were mock values. Do not present any of them as acquired data.
 
 ## Known risks and open issues
 
-- **TLS is not verified.** `setInsecure()` skips certificate checking on both Firebase connections. Pin the Google root CA
-  before treating the uplink as trustworthy.
+- **TLS is not verified on the Firebase connections.** `setInsecure()` skips certificate checking on both. Pin the Google
+  root CA before treating the uplink as trustworthy. (The pass schedule fetch does check its certificate.)
 - **Credentials in flash.** `secrets.h` is compiled into the firmware image. Treat a lost board as a leaked password and
   rotate the Firebase user's password.
 - **Strapping pin.** GPIO12 must be low at boot. If the board will not boot after the RF block transistor is wired, check this first.
@@ -286,26 +311,30 @@ The old CP4 report numbers were mock values. Do not present any of them as acqui
   tach edge can be serviced a little late. The debounce window (2 ms) is shorter than any realistic pulse spacing, so the
   count stays right; resolution of the RPM reading is about 15 RPM over the 2 s window.
 - **Sparse RF signal.** The RF reading is one broadband power number behind a 137 MHz SAW filter, not a spectrum. It sits near
-  -75 dBm without a signal. Anything that visualizes "signal" should use dB above a rolling baseline.
+  -75 dBm without a signal. The RQS works in dB above its own baseline, and its pass tag is evidence, not proof, that a rise
+  is the satellite.
+- **BMP388 position.** It sits elsewhere in the box, away from the AD8307 and the ESP32, so it reads box air, not the AD8307.
 - **SAWbird 5 V supply** is the last open hardware task: Cole plans to power it from a stripped USB-C cable, then check
-  the RF chain with a NanoVNA. Until then the RF reading stays flat.
-- **Version 1.1 not run on hardware.** It compiles (see the top of this file). The battery health logic is tested on a
-  PC with a simulated pack; the sketch around it (INA219 averaging, flash, uploads, `h`, `z`) has not run on the board.
+  the RF chain with a NanoVNA. Until then the RF reading stays flat and the RQS stays at NO SIGNAL.
+- **Third TLS client.** The schedule fetch adds one, but it connects only every 6 hours and closes right away, so at most two
+  TLS sessions are open at once, as before.
 
 ## First-run test checklist
 
-1. Compile (already verified with the versions above).
+1. Compile (1.2 verified with the versions above).
 2. Flash with `FAN_ENABLED 0`, USB only (no 12 V). Confirm the LCD, I2C (BMP388 and INA219 lines in Serial), WiFi, and a
    successful sign-in line (`Firebase sign-in -> HTTP 200`).
 3. Check the Firebase console: `/station/latest` appears and updates, `/station/history` grows by one record per 10 s,
    `/station/touch` changes on a press.
 4. Rules test: try a write with no token (for example `curl -X PUT -d '{}' https://<host>/station/test.json`). It must be refused.
 5. Power from the battery. Confirm INA219 voltage and current against the multimeter; run `f` right after a full charge.
-6. Run `m` and the capacitive `b`, `s`, `c` commands; confirm press, release, and the counter.
+6. Run `m` and the capacitive `b`, `s`, `c` commands; confirm press, release, the counter, and that each press moves the
+   LCD to the next page and back to page 0 after page 4.
 7. Do the tach check above, then set `FAN_ENABLED 1` and confirm a sane RPM that tracks fan speed. Done 2026-10-31:
    about 1,050 to 1,110 RPM on the 12 V battery, about 650 RPM on laptop USB power (USB is only used while flashing).
 8. Pull the WiFi for a minute and plug it back in: uploads must resume without a reboot.
 9. Leave it running for an hour: sign-in refreshes around the 50 minute mark without a gap in `/station/latest`.
-10. Battery health, after the INA219 calibration: run `h` once a day. Use the station normally for a few charge cycles
-    and check that `/station/healthLog` gets one record per discharge. Also plug the charger in mid-discharge, and
-    power-cycle mid-discharge. The full list is in `SPEC.md` section 14.18.
+10. RQS: after 5 minutes the LCD page 0 shows a score instead of "warming up". Run `q`: the clock should be set, and
+    once `PASSES_URL` is in `secrets.h`, the schedule should show the next passes. Then do the three tests in
+    `docs/rqs-validation.md` (NanoVNA, warm-up, a real pass).
+11. Run the two calibration sketches and paste their `#define` lines into the station sketch.

@@ -3,8 +3,10 @@
 A live dashboard for a student-built 137 MHz weather-satellite ground station (ELEE 4230/6230). An ESP32 reads a
 broadband RF power detector, environment sensors, a touch pad, a fan tach and the battery, and writes them to Firebase
 Realtime Database. This static site shows them live, with a 3D globe that tracks Meteor-M2-4 from public orbit data.
-The station also estimates the battery's state of health from normal use (the course "go beyond" algorithm,
-`SPEC.md` section 14), shown as a pill next to the battery percent and as an all-time chart.
+The station also works out a reception quality score (RQS) from its radio reading every 2 s: a 0 to 100 score that
+combines a noise baseline and detection (OS-CFAR), a match against the predicted satellite pass (free-space path
+loss) and the station's health. It is the course "go beyond" algorithm, `SPEC.md` section 14, and it is the large
+instrument at the top of the page.
 
 `SPEC.md` is the source of truth for what the site does and why.
 
@@ -13,6 +15,7 @@ The station also estimates the battery's state of health from normal use (the co
 ```
 ESP32 --(HTTPS, signed in)--> Firebase Realtime Database --(public read)--> this site (GitHub Pages)
 GitHub Actions, every 6 h --> CelesTrak orbit data --> site/data/gp.json --> this site
+                                                   \-> site/data/passes.json (next 48 h of passes) --> the ESP32
 ```
 
 - The site needs no key or password. It only reads, and the database address is public by design.
@@ -25,14 +28,17 @@ GitHub Actions, every 6 h --> CelesTrak orbit data --> site/data/gp.json --> thi
 |---|---|
 | `site/` | The website. This folder, and only this folder, is published. |
 | `site/js/config.js` | Every setting: database address, station location, thresholds, RF and charging constants. |
-| `site/js/lib/` | Pure logic with unit tests (freshness, battery, battery health, charging inference, RF baseline, SGP4, graph data). |
+| `site/js/lib/` | Pure logic with unit tests (freshness, battery, charging inference, reception quality score, SGP4, graph data). |
 | `site/data/gp.json` | Orbit data. Refreshed on every deploy. |
+| `site/data/passes.json` | The pass schedule the station fetches for its score. Made on every deploy by `tools/make-passes.mjs`; never committed (it expires after 48 h). |
 | `site/vendor/` | Self-hosted three.js, globe.gl and satellite.js, bundled by `npm run vendor` (do not edit by hand). |
 | `site/textures/` | Earth textures (4K for laptops, 2K for phones). |
-| `tests/` | Unit tests, browser tests, firmware logic tests (`tests/firmware/`, with a SYNTHETIC simulated pack), the labeled fixture data source, the local preview server, the secret scan. |
+| `tests/` | Unit tests, browser tests, firmware logic tests (`tests/firmware/`, with SYNTHETIC radio readings and passes), the labeled fixture data source, the local preview server, the secret scan. |
 | `tools/fetch-orbit.mjs` | Downloads orbit data from CelesTrak. |
+| `tools/make-passes.mjs` | Writes the station's pass schedule from the orbit data. |
 | `tools/vendor.mjs` | Rebuilds `site/vendor/` from the versions pinned in `package.json`. |
-| `firmware/` | ESP32 firmware and its own README (pin map, Firebase setup, hardware checklist). |
+| `firmware/` | ESP32 firmware, two calibration sketches (touch pad, thermistor) and its own README (pin map, Firebase setup, hardware checklist). |
+| `docs/` | `rqs-validation.md`: the tests that check the score on the real station. Real results go in `docs/validation/`. |
 
 ## Run it on your computer
 
@@ -53,7 +59,7 @@ commit the result.
 
 ```sh
 npm test               # firmware logic tests, unit tests, then browser tests (desktop and 360 px phone)
-npm run test:firmware  # battery health logic on this computer (add -- -v for the accuracy table)
+npm run test:firmware  # reception quality score logic (rqs.h) on this computer (add -- -v for details)
 npm run screenshots    # writes tests/screenshots/desktop.png and phone.png for review
 npm run scan           # secret scan (also runs before every commit and in CI)
 ```
@@ -88,24 +94,21 @@ v1 shows the first satellite in the list. The orbit code works for any of them.
 
 ## Keep the database inside the free plan
 
-- History grows about 4 MB a day. The 1 GB free storage lasts roughly 7 to 9 months.
+- History grows about 6 MB a day. The 1 GB free storage lasts roughly 5 to 6 months.
 - Before it fills: Firebase console, Realtime Database, Data. Select `station/history`, export it with the menu
   if you want a copy, then delete the `history` node. The live readings are not affected; graphs restart empty.
 - The site never downloads more than 24 hours of history, closes its live connection while the tab is hidden, and
   the database rules refuse any history read that is not a limited, time-ordered query.
-- Battery health adds a few small records a day (`/station/healthLog`, about 0.01 MB a day). **Do not delete
-  `healthLog` or `health` when you clear history:** the health score is built from that log.
 
 ## Honest limits
 
-- The RF reading is one broadband power number, not a spectrum. A rise can be interference. The page shows dB above a
-  rolling baseline and the satellite elevation side by side.
+- The RF reading is one broadband power number, not a spectrum. A rise can be interference. The reception quality
+  score checks a rise against the predicted pass, which is evidence, not proof. Its weights and thresholds are guesses
+  until real passes are logged (`docs/rqs-validation.md`), and its temperature is box air at the BMP388, not the RF
+  detector chip.
 - The battery percent is an estimate. "Charging" is only ever inferred, and its badge stays off until it is tuned on a
   real logged charge (`charging.showBadge` in `config.js`; the live inference is visible in Diagnostics).
 - The thermistor carries an unverified legacy calibration and is tagged "unverified" until checked against the BMP388.
-- Battery health (SOH) is an estimate from voltage and current with a plus-or-minus, not a lab capacity test. It
-  needs a few discharges before the plus-or-minus is small, and it says "uncalibrated" until the INA219 current sensor
-  is calibrated. The limits are listed in `SPEC.md` section 14.16.
 
 ## Credits
 

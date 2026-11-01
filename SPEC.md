@@ -1,6 +1,6 @@
 # Satellite V-Dipole Tracking Station: Dashboard v2 Spec
 
-Status: v1 site built (section 13). Battery state of health (section 14) built 2026-11-01 and tested on a PC and against fixtures; not yet run on the station.
+Status: v1 site built (section 13). Battery state of health was cancelled on 2026-11-01 (Cole) and is replaced by the reception quality score (section 14) as the course "go beyond" algorithm. Section 14 and the firmware 1.2 changes in section 15 were built on 2026-11-01 (not committed until Cole approves): tested on a PC and against labeled fixtures, compiled for the ESP32, not yet run on the station. Build report: 14.22.
 Last updated: 2026-11-01. This file replaces the draft PDF as the source of truth.
 
 Rules that apply to everything below:
@@ -51,7 +51,10 @@ Success criteria (from the draft, unchanged):
 | D18 | Google Photorealistic 3D Tiles are out of v1. | Needs a restricted, budget-capped key. | Q17 |
 | D19 | The satellite is an illustrative 3D model (gold bus, two solar wings, Earth-facing antenna), drawn about 500 km across and labeled as not to scale. | Cole asked for a model instead of a dot; no exact public model exists. | Review |
 | D20 | No LIVE/DELAYED/OFFLINE pill. Freshness shows as data age, the offline banner and dimmed cards. The header is not sticky on phones. | Cole's request. | Review |
-| D21 | Battery state of health (SOH) is the course "go beyond" algorithm: usable energy over the 26.6 Wh label, learned from normal use (no learning runs). Each discharge is one slice of evidence; a weighted total least squares fit (Plett 2011) gives one score with a plus-or-minus, shown from the first usable slice. Separate `health` and `healthLog` nodes. No internal resistance shown. Colors 80 / 60, with 60 marked as a project choice. Full design in section 14. | Course requirement; Cole wants no special learning procedure and no new hardware. | SOH brief and Cole's answers 2026-10-31 |
+| D21 | Cancelled 2026-11-01. Battery state of health (SOH) was built (commits 6ff2797 to 7213c52, never run on the station) and is removed from the firmware, the site, the tests and the data contract. Git history keeps the record. Kept from that work: the INA219 128-sample averaging (cleaner current for the battery estimate) and the PC test runner for firmware logic. See 14.21. | Cole replaced it with the reception quality score. | Cole, 2026-11-01 |
+| D22 | The course "go beyond" algorithm is the reception quality score (RQS): one 0 to 100 score from the RF reading, combining a causal OS-CFAR baseline and detection (Rohling 1983), a pass match against the free-space path loss shape (Friis 1946) and a health factor. Temperature for every RQS need comes from the BMP388 only, never the thermistors. Design in section 14. | Course requirement; ties the RF chain to the satellite. | RQS brief and Cole's answers, 2026-11-01 |
+| D23 | LCD (Cole, 2026-11-01): five pages. At power on it shows RF strength and the RQS; each touch goes to the next page: temperatures (thermistor and BMP388), pressure and altitude, fan RPM, battery current and time left, then back to RF. Nothing else on the LCD. See 15.1. | Cole's request. | Cole, 2026-11-01 |
+| D24 | Calibration sketches for the capacitive sensor and the thermistor, separate from the station sketch. Each walks through a measurement over Serial and prints `#define` lines to paste into `station_firmware.ino`. See 15.2. | Cole's request. | Cole, 2026-11-01 |
 
 ## 3. The station and its data
 
@@ -61,9 +64,9 @@ So the site must handle null, missing and unverified data from day one.
 
 | Subsystem | What the number can and cannot mean |
 |---|---|
-| BMP388 | Air temperature and pressure. Altitude uses a fixed 1013.25 hPa sea level, so it drifts with weather and is not true altitude. The board was physically damaged, so treat it as unconfirmed until Cole checks it. |
-| Thermistor | Carries a +96.2 C legacy offset in the conversion. Show an "unverified" tag on every thermistor value and chart until Cole confirms it agrees with the BMP388. One config flag removes the tag. |
-| RF chain | One broadband power number in dBm (about -75 dBm with no signal). Not a spectrum. Cannot tell a satellite from interference. Flat until the SAWbird has power (planned: a stripped USB-C cable) and the chain is checked with a NanoVNA (O15). |
+| BMP388 | Air temperature and pressure. Altitude uses a fixed 1013.25 hPa sea level, so it drifts with weather and is not true altitude. The board was physically damaged, so treat it as unconfirmed until Cole checks it. `tempC` is the raw `bmp.temperature` reading (checked 2026-11-01: no offset or constant is added; the only processing is the chip's own factory trim and its noise filter setting). It sits elsewhere in the box, away from both the AD8307 and the ESP32 (Cole, 2026-11-01), so it reads box air. It is the only temperature the RQS uses (section 14). |
+| Thermistor | Carries a +96.2 C legacy offset in the conversion (the constant was named `BMP388_CALIBRATION_OFFSET` but is added to the thermistor, not the BMP388; renamed `THERM_OFFSET_C` in 1.2). Show an "unverified" tag on every thermistor value and chart until Cole confirms it agrees with the BMP388. One config flag removes the tag. Not used by the RQS. The calibration sketch in 15.2 replaces the offset with fitted constants. |
+| RF chain | One broadband power number in dBm (about -75 dBm with no signal). Not a spectrum. Cannot tell a satellite from interference by itself; the RQS pass match (14.8) is how the station argues that a rise is the satellite. Flat until the SAWbird has power (planned: a stripped USB-C cable) and the chain is checked with a NanoVNA (O15). |
 | Touch pad | touched, count since boot, delay, delta, fault flag. Thresholds need re-tuning after final assembly. |
 | INA219 | Voltage, current and power on the 12 V line, between the button and the buck converter. It measures what the system draws. |
 | Battery estimate | An estimate. Derating 0.90 and internal resistance 0.25 ohm are placeholders. Always shown with "~". |
@@ -79,10 +82,12 @@ So the site must handle null, missing and unverified data from day one.
 
 ```
 SPEC.md  README.md  .gitignore
-site/            the published website (index.html, js/, css/, data/gp.json)
-tests/           unit tests, Playwright tests, tests/fixtures (never published)
-firmware/        README.md, station_firmware/ (sketch, soh.h, secrets.example.h)
-.github/workflows/   tests, secret scan, orbit data job, Pages deploy
+site/            the published website (index.html, js/, css/, data/gp.json, data/passes.json)
+tests/           unit tests, Playwright tests, tests/fixtures, tests/firmware (never published)
+firmware/        README.md, station_firmware/ (sketch, rqs.h, secrets.example.h),
+                 cal_capacitive/ and cal_thermistor/ (calibration sketches, 15.2)
+docs/            rqs-validation.md (procedures for Cole); docs/validation/ holds real results only after Cole runs them
+.github/workflows/   tests, secret scan, orbit data and pass schedule job, Pages deploy
 (.claude/skills/ holds local helper skills; git-ignored, not published)
 ```
 
@@ -93,7 +98,8 @@ firmware/        README.md, station_firmware/ (sketch, soh.h, secrets.example.h)
 
 ```
 ESP32 --sign in, PUT latest 2 s, POST history 10 s--> Firebase RTDB --stream + history query--> Browser (static site)
-GitHub Action (every few hours) --> CelesTrak GP data --> site/data/gp.json --> Browser (same origin)
+GitHub Action (every 6 h) --> CelesTrak GP data --> site/data/gp.json --> Browser (same origin)
+                          \-> SGP4 for the next 48 h --> site/data/passes.json --HTTPS GET every 6 h--> ESP32 (RQS pass match, 14.8)
 ```
 
 - Only the ESP32 writes. The site needs no key or password, only the public database URL.
@@ -107,11 +113,12 @@ Budget (re-check on the vendor pages before relying on it): Spark allows 100 con
 
 | Item | Number | Note |
 |---|---|---|
-| Record size | 417 bytes of JSON, about 441 stored with its push key | Measured 2026-10-31 by building the firmware's JSON with realistic values (13-digit `ts`, every field at its sent precision). Re-check on the first real record. |
-| History growth | about 3.8 MB/day | 1 GB lasts about 262 days. |
-| One always-open tab | about 18 MB/day | About 0.54 GB/month. 50% of the download limit is about 9 such tabs. |
-| 24 h history load | about 3.8 MB | Fine now and then, not on every page view. |
-| Battery health (section 14.13) | under 0.4 MB/day per tab, about 0.01 MB/day stored | With the recommended separate health nodes. Adding the fields to every record instead costs much more (14.13). |
+| Record size | 417 bytes of JSON, about 441 stored with its push key, before the RQS | Measured 2026-10-31 by building the firmware's JSON with realistic values (13-digit `ts`, every field at its sent precision). Re-check on the first real record. |
+| With the RQS (14.13) | history record about 637 bytes (about 661 stored); `/station/latest` about 697 | Measured 2026-11-01 from the firmware's own RQS JSON (`rqs::appendJson`, in the PC tests): the 12 fields add 220 bytes, the 4 parts in `latest` 60 more. Re-check on the first real record. |
+| History growth | about 5.7 MB/day (was 3.8) | 1 GB lasts about 175 days (was 262). |
+| One always-open tab | about 30 MB/day (was 18) | About 0.9 GB/month. 50% of the download limit is about 5 such tabs (was 9). |
+| 24 h history load | about 5.7 MB (was 3.8) | Fine now and then, not on every page view. |
+| Pass schedule | about 1.6 to 1.8 KB per fetch, 4 fetches a day | From GitHub Pages, not Firebase. No Firebase cost. |
 
 Database rules (any change needs Cole's OK; Firebase is not set up yet, so these can be right from the start). Proposed, stricter than the firmware README (see analysis A1):
 
@@ -126,28 +133,24 @@ Database rules (any change needs Cole's OK; Firebase is not set up yet, so these
         ".read": "query.orderByChild == 'ts' && query.limitToLast <= 9000",
         ".indexOn": ["ts"]
       },
-      "health":    { ".read": true },
-      "healthLog": {
-        ".read": "query.orderByChild == 'ts' && query.limitToLast <= 500",
-        ".indexOn": ["ts"]
-      },
       ".write": "auth != null && auth.token.email == '<esp32 user email>'"
     }
   }
 }
 ```
 
-Replace the placeholder email only in the Firebase console. Turn off new sign-ups if the console allows it. The `health` and `healthLog` entries are for battery health (section 14), approved by Cole on 2026-10-31 (O9).
+Replace the placeholder email only in the Firebase console. Turn off new sign-ups if the console allows it. The `health` and `healthLog` entries were removed with battery health (D21, Cole's request 2026-11-01). Firebase is not set up yet, so no live rules change. The RQS needs no new node: its fields live in `latest` and `history`, which the rules above already cover.
 
 ## 6. Fields
 
-All 25 keys under `/station/latest` (and each history record): ts, tempC, pressHPa, altM, thermRaw, thermFilt, rfRawDbm, rfFiltDbm, capTdUs, capDeltaUs, capPF, touched, touchCount, capFault, battV, battmA, battmW, battSocPct, battWhLeft, battHoursLeft, battPeakmA, fanRpm, fanStalled, rssi, uptimeS. Also `/station/touch` {state, count, ts} and `/station/meta` {fw, bootTs}. Battery health adds `/station/health` and `/station/healthLog` (section 14.12).
+The 25 original keys under `/station/latest` (and each history record): ts, tempC, pressHPa, altM, thermRaw, thermFilt, rfRawDbm, rfFiltDbm, capTdUs, capDeltaUs, capPF, touched, touchCount, capFault, battV, battmA, battmW, battSocPct, battWhLeft, battHoursLeft, battPeakmA, fanRpm, fanStalled, rssi, uptimeS. The RQS adds 12 keys to both (rqs, rqsLabel, rqsTag, rfExcessDb, rfBaselineDbm, rfThresholdDbm, rfSigmaDb, rfDetected, passElDeg, passCorr, nextPassEpoch, rqsTempC) and 4 to `latest` only (rqsSnr, rqsDet, rqsPass, rqsHealth); see 14.12. Also `/station/touch` {state, count, ts} and `/station/meta` {fw, bootTs, rqsAlphaT}.
 
 | Where | Fields |
 |---|---|
 | Status bar | ts (age), uptimeS, rssi |
+| RQS instrument (the hero, 14.14) | rqs, rqsLabel, rqsTag, rqsSnr, rqsDet, rqsPass, rqsHealth, passElDeg, passCorr, nextPassEpoch, rqsTempC; rqs from history for the sparkline |
 | Battery widget | battSocPct, battHoursLeft, battV, battmA, battmW, battWhLeft, battPeakmA (detail) |
-| RF meter | rfFiltDbm, rfRawDbm (graph) |
+| RF meter | rfFiltDbm, rfExcessDb (level), rfBaselineDbm; rfRawDbm, rfThresholdDbm, rfDetected (graph) |
 | Fan card | fanRpm, fanStalled |
 | Touch card | touched, touchCount, capFault, capDeltaUs (detail), last touch time |
 | Environment | tempC, thermFilt (tagged unverified), thermRaw |
@@ -174,13 +177,13 @@ Priority order: look and feel, live data and freshness, battery widget, globe wi
 
 **F3b Next pass.** One line "next pass in HH:MM" (and maximum elevation), computed by stepping SGP4 forward over the next day. Hidden if the orbit data is unavailable.
 
-**F4 RF visuals.** Driven by dB above a rolling baseline, not absolute dBm. Baseline is the 20th percentile of rfFiltDbm over 30 minutes, held while the signal is elevated. Level = clamp((rf minus baseline) / 12 dB, 0 to 1). All constants in config because nobody has measured a real pass. Pulsing rings from the marker (none at level 0), a beam line only while the satellite is above the horizon, and an S-meter that prints real dBm and dB above baseline plus satellite elevation. Labeled "Signal strength (broadband)" with a note that a rise can be interference. No spectrum or waterfall. Idle is normal and is not faked.
+**F4 RF visuals.** Driven by dB above a rolling baseline, not absolute dBm. (Changed 2026-11-01:) the baseline now comes from the station (`rfExcessDb`, `rfBaselineDbm`, computed by the RQS in 14.5), and the browser's own 30 minute baseline is removed, so the page and the score never disagree. Level = clamp(rfExcessDb / 12 dB, 0 to 1); level 0 while `rfExcessDb` is null. Pulsing rings from the marker (none at level 0), a beam line only while the satellite is above the horizon, and an S-meter that prints real dBm and dB above baseline plus satellite elevation. Labeled "Signal strength (broadband)" with a note that a rise can be interference. No spectrum or waterfall. Idle is normal and is not faked.
 
 **F5 Touch.** Card with TOUCHED or idle, counter since boot, last touch time, "SENSOR FAULT" on capFault. Reacts through `/station/touch`. Ripple on the marker plus a brief card highlight (D10). Without the globe loaded, the card highlight alone.
 
 **F6 Fan.** SVG blades, visual speed capped near 3 turns per second, real RPM always printed. States: spinning, stalled (fanStalled or under 200 RPM), not connected (null). Caption notes that speed falls with battery voltage.
 
-**F7 Graphs.** Lower section, tabs or collapsible groups. Keep the four v1 charts (BMP388 temperature/pressure/altitude on separate axes, thermistor raw vs filtered, RF raw vs filtered, BMP388 vs thermistor). Add battery, fan, capacitive delta, RSSI. Ranges 15 min, 1 h, 6 h, 24 h. Gaps for null. Chart.js, pinned.
+**F7 Graphs.** Lower section, tabs or collapsible groups. Keep the four v1 charts (BMP388 temperature/pressure/altitude on separate axes, thermistor raw vs filtered, RF raw vs filtered, BMP388 vs thermistor). Add battery, fan, capacitive delta, RSSI. Ranges 15 min, 1 h, 6 h, 24 h. Gaps for null. Chart.js, pinned. (2026-11-01:) the RF chart gains the baseline and threshold lines and shaded pass windows and detections, and a new RQS history chart and detection log join it (14.14).
 
 **F8 Reliability.** No uncaught exceptions. Calm retry messages with backoff. Hidden diagnostics panel (connection state, data age, orbit-data age, last error).
 
@@ -198,7 +201,8 @@ Orbit pipeline: the Pages deploy workflow runs on every push and every 6 hours. 
 - Everything in the repo is public (Pages needs it).
 - `secrets.h` is git-ignored. Secret scan in CI (section 4).
 - Database: public read of the live nodes, history read only through an indexed, limited query, single-user write (section 5).
-- Firmware TLS currently skips certificate checks. Pin the Google root before treating the uplink as secure. Firmware task, Cole decides when.
+- Firmware TLS currently skips certificate checks on the two Firebase connections. Pin the Google root before treating the uplink as secure. Firmware task, Cole decides when.
+- The pass schedule fetch (14.8) does check the certificate, with the ESP32 core's built-in certificate bundle (`useBuiltinCACertBundle()`, in core 3.3.12). A forged schedule could only change the score, never the uplink.
 
 ## 10. Milestones
 
@@ -221,7 +225,7 @@ Definition of done: all milestones complete, all tests pass and shown to Cole, n
 
 | ID | Item | Owner |
 |---|---|---|
-| O1 | Create the Firebase project, database and ESP32 user (firmware README steps 1 to 3; the rules there now include `health` and `healthLog`). Tell the agent only the database host name. | Cole |
+| O1 | Create the Firebase project, database and ESP32 user (firmware README steps 1 to 3). Tell the agent only the database host name. | Cole |
 | O2 | Names and Pages deploy approved 2026-10-31. Rename the local folder at handoff. | Cole |
 | O3 | Decided: Firebase JS SDK from a pinned CDN (server clock offset via `.info/serverTimeOffset`, built-in reconnect). | Done |
 | O4 | Logged charge test for the charging inference (section 7, F2). | Cole |
@@ -229,13 +233,13 @@ Definition of done: all milestones complete, all tests pass and shown to Cole, n
 | O6 | Bench check: thermistor vs BMP388, BMP388 health. (Fan tach done 2026-10-31: wired to GPIO18 and reading correctly.) | Cole |
 | O7 | Firmware changes the agent wants to ask for (none made yet): rename user-visible old-name strings (splash text, version string, flash namespace), charge-aware battery estimate, slimmer history records, TLS pinning. | Cole decides |
 | O8 | Take down v1 after v2 is live. Consider exporting ThingSpeak data first. | Cole |
-| O9 | Decided: separate `/station/health` and `/station/healthLog` nodes, with their two read rules (section 5). | Done |
-| O10 | Decided: no new hardware. Internal resistance is not measured and not shown. | Done |
-| O11 | Default applied: the BMP388 air temperature gates slices (15 to 35 C). Cole can switch to the thermistor once it is verified. | Cole may change |
-| O12 | Decided: 80 / 60 bands; 80 cited (USABC), 60 marked as a project choice. | Done |
-| O13 | Hardware checks for SOH: INA219 calibration and voltage check, charger full voltage, a few normal charge cycles, `h` reports (section 14.18). | Cole |
-| O14 | Decided 2026-10-31: SOH plan approved. | Done |
+| O9 to O14 | Battery health items. Cancelled with battery health on 2026-11-01 (D21). | Closed |
 | O15 | RF: power the SAWbird from a stripped USB-C cable, then confirm the RF chain with a NanoVNA. The last hardware task. | Cole |
+| O16 | Decided 2026-11-01: the BMP388 sits elsewhere in the box, away from the AD8307 and the ESP32. It reads box air (14.4). | Done |
+| O17 | Run the RQS validation procedures in `docs/rqs-validation.md` (NanoVNA CW test, warm-up test for ALPHA_T, a real pass log). Results go in `docs/validation/` only after they are run. | Cole |
+| O18 | After Pages is enabled: put the pass schedule address (`https://<user>.github.io/vdipole-tracking-station/data/passes.json`) in `secrets.h` as `PASSES_URL`. Until then the station tags every score NO SCHEDULE. | Cole |
+| O19 | Decided 2026-11-01 (Cole left it to the agent): `/station/meta` carries `rqsAlphaT`, and all 12 RQS fields stay in history. | Done |
+| O20 | Run the two calibration sketches (15.2) and paste their `#define` lines into the station sketch. | Cole |
 
 ## 12. Analysis findings
 
@@ -261,7 +265,7 @@ A9. **Draft contradictions fixed here:** the draft's red-at-20% battery rule is 
 
 A10. **Renaming touches the firmware.** The sketch file, its version string, the LCD splash text, the README title, and the flash namespace used for the saved battery value all carry the old name. Renaming the flash namespace makes the board forget its saved battery value once (it restarts from the voltage reading; press `f` after a full charge). The Arduino IDE also needs the sketch inside a folder of the same name. None of this is done yet.
 
-A11. **Two TLS clients on an ESP32 can exhaust heap.** The firmware keeps two secure clients alive. This is a firmware risk, not a site risk, noted for the compile-and-run step.
+A11. **Two TLS clients on an ESP32 can exhaust heap.** The firmware keeps two secure clients alive. This is a firmware risk, not a site risk, noted for the compile-and-run step. (2026-11-01:) the pass schedule fetch adds a third client object, but it connects only every 6 hours and closes right after, while the sign-in client is closed, so at most two TLS sessions are open at once, as before.
 
 A12. **Thermistor offset of +96.2 C.** Without the unverified tag, thermistor charts could be read as truth. Tag stays until Cole clears it.
 
@@ -291,278 +295,393 @@ Built differently from the draft, on purpose:
 - Headless test browsers log a "GPU stall due to ReadPixels" driver notice from their software GPU. The page never calls
   readPixels (checked with a probe), so the console test ignores that one notice and nothing else.
 
-## 14. Battery state of health (the course "go beyond" algorithm)
+## 14. Reception quality score (the course "go beyond" algorithm)
 
-Status: designed 2026-10-31 with Cole's answers (O9 to O12) and approved the same day. S1 built 2026-11-01: `firmware/station_firmware/soh.h` and its PC tests. S2 built the same day: firmware 1.1 uses it (compiled, not yet run on the station). S3 built the same day: the pill, panel and chart on the website, tested against labeled fixtures. S4 (these docs and the build report in 14.20) done the same day. Details settled or changed while building S1 are marked "(S1)".
+Status: designed 2026-11-01 from the RQS brief and Cole's answers, and built the same day (R0 to R5, 14.20; build report 14.22). Not committed until Cole approves. Not yet run on the station. Every constant in 14.11 is a PLACEHOLDER until measured, except the few marked "fixed" (physics or statistics). Items added by the agent on top of the brief are marked "(added)"; changes found while building are marked "(built)".
 
 ### 14.1 What it is, and how it meets the course
 
-SOH here means: the energy the pack can deliver now, divided by the label energy (26.6 Wh), times 100. A new pack can read above 100 if the label is modest. The raw number is kept and logged; the website shows at most 100.
-
-There are no learning runs and no special procedure (Cole's choice). The station learns from normal use: every stretch of discharge is one "slice" of evidence, and one fit turns all the slices into a single score with an honest plus-or-minus.
+The RQS answers one question every 2 seconds: "how good is what the antenna hears right now, and is it the satellite?" It is a number from 0 to 100, a label (NO SIGNAL, WEAK, GOOD, STRONG) and a tag that says what it was compared against (PASS, NO PASS, NO SCHEDULE, TEST).
 
 | Course requirement | How this design meets it |
 |---|---|
-| Correlates to published research | The combination step is the weighted total least squares capacity estimate of Plett 2011, built for partial use (hybrid cars that never fully discharge). SOH as releasable capacity follows Ng et al. 2009. The 80% line follows the USABC manual. See 14.17. |
-| Combines measurements into a final score | Each slice pairs two measurements: energy from the INA219 and the change in charge level from the voltage. One weighted fit over all slices gives the score and its uncertainty (14.7). Temperature gates which slices count. |
-| Logged to the cloud for a sufficient time | Every slice, accepted or rejected with its reason, is appended to `/station/healthLog` with the fit after it. Never pruned. |
+| Ties to published science | The baseline and detection are a causal ordered-statistic CFAR detector (Rohling 1983). The expected power during a pass follows the Friis free-space equation (Friis 1946): received power falls with the square of the distance. The temperature behaviour comes from the AD8307 datasheet. The robust spread uses the scaled median absolute deviation (Rousseeuw and Croux 1993). See 14.18. |
+| Combines measurements into one score | RF power (AD8307), BMP388 temperature, battery charge (INA219 estimate), the clock (NTP) and the satellite's predicted path (SGP4 from CelesTrak data) become four parts and one weighted score (14.10). |
+| Logged to the cloud | The score and every part that explains it go into `/station/latest` every 2 s and `/station/history` every 10 s (14.12). |
 
 ### 14.2 What the station can and cannot measure
 
-- **The INA219 sees only what the station draws.** It sits between the power button and the buck converter, so it never sees charger current. Charging can only be inferred: the voltage rises while the load stays steady.
-- **The pack never rests while the station is on.** It always draws about 100 mA (about C/24). At that small, steady load, the voltage plus I x R is close to the open-circuit value. Points like that are "quasi-rest" anchors.
-- **Small use gives a rough answer.** One hour uses about 1.2 Wh, about 4.5% of the pack, so the voltage moves only a little, and the voltage table is generic (not measured on this pack). Expected accuracy is in 14.8. Cole's usage (on battery, recharged when low) is the best case: each discharge is a long slice.
-- **No internal resistance.** Measuring it needs a load step the firmware controls, and the station has none (the fan is always on; WiFi bursts are milliseconds and about 25 mA at the pack). Cole chose no new hardware, so resistance is not measured and not shown anywhere. The 0.25 ohm placeholder stays only inside the voltage correction.
-- **Temperature is the box air.** Nothing touches the pack, but at 100 mA it heats itself by only about 3 mW (0.1 A squared times 0.25 ohm), so it sits at the air temperature. The BMP388 is used (default; Cole did not pick a sensor). The thermistor can replace it with one setting once verified.
-- **The INA219 is uncalibrated.** `INA219_CURRENT_GAIN` (1.0) and `INA219_CURRENT_OFFSET_MA` (0.0) are placeholders. Every energy number scales with the gain. The website says "uncalibrated" until they are set.
+- **One broadband number.** The AD8307 reports total power in the SAW filter's band. It cannot see a spectrum, so it cannot prove a rise is Meteor-M2-4. The pass match (14.8) is the evidence: a rise that follows the predicted distance curve during a predicted pass is very likely the satellite; a rise outside any pass is tagged NO PASS (possible interference) and can score at most 70.
+- **The reading is already smoothed.** `rfFiltDbm` comes from the firmware's Kalman filter (Q 0.01, R 1.0), which settles to a gain of about 0.1 per sample: roughly a 20 s time constant. Its spread is small, which is why sigma has a floor (14.5), and a detection lags a real rise by some seconds.
+- **Temperature is box air.** The BMP388 sits elsewhere in the box, away from the AD8307 and the ESP32 (Cole, 2026-11-01). It measures the air at its own board, not the AD8307 die. The AD8307 runs a little warmer than the air around it (it draws about 8 mA at 5 V by the datasheet, about 40 mW). A box that warms evenly is fine; a fan draft or sun on one side is not. This is said in "Why this score?" on the site.
+- **The antenna pattern is not modelled.** The expected power uses distance only. The V-dipole's gain changes with elevation and direction, so a real pass will not follow the curve exactly. The correlation (14.8) measures shape, not level, which helps, but a pattern null can still lower it.
+- **No new hardware.** Everything uses sensors that already exist.
 
-### 14.3 Inputs, cleaned up first
+### 14.3 Inputs
 
-- **INA219 averaging (firmware change).** Today one 0.5 ms snapshot is taken every 2 s. It catches WiFi bursts at random, which looks like about plus or minus 25% current noise and would fail every "steady current" check. New: the chip averages 128 samples per reading (69 ms), the firmware reads it every 100 ms and averages each 2 s window. The existing battery estimate gets the cleaner numbers too.
-- **Open-circuit estimate:** V_oc = V_batt + I x 0.25 ohm (placeholder).
-- **SOC** from V_oc with the existing table.
-- **SOE (energy percent)** from the same table: voltage integrated over charge, because the top of the curve, at higher voltage, holds more watt-hours per percent. Slices use SOE so they are scaled by energy, not charge.
-
-### 14.4 Energy counting
-
-- E (Wh) = sum of V_batt x I x dt. Also Ah = sum of I x dt, logged so results can be compared with papers that use Ah.
-- Sums use double precision. A float would lose about 0.2% over a 21-hour discharge.
-- dt is capped at 10 s. A slice with more than 1% of its time lost to gaps is rejected.
-
-### 14.5 Anchors and slices
-
-**Anchors** are moments when the voltage says something trustworthy about the charge level:
-
-| Anchor | When | SOE and its uncertainty |
+| Input | From | Every |
 |---|---|---|
-| Full | The charger held V_oc at or above 12.54 V (4.18 V per cell) for at least 20 minutes (PLACEHOLDER), then let go (unplugged, or it finished). The moment it let go is the anchor. (S1) While charging, V_oc reads high by the charge current times the resistance, so 12.54 V is reached when the charger switches to constant voltage, not at full; the 20 minutes give it time to top the pack off. | 100, plus or minus 1 point (the charger defines full better than the table) |
-| Quasi-rest | Every 2 s window where: current under 300 mA; current steady over 2 minutes (within 5% or 8 mA, whichever is larger); voltage not rising (at most +2 mV per minute) and not collapsing (falling slower than 30 mV per minute); at least 60 minutes after a charge ended or the station started (S1: it may have been charged while off); temperature known. The voltage used is the straight-line fit over those 2 minutes, at the present moment. | From the table. Uncertainty = voltage uncertainty / slope of the curve there, at least 1 point. Voltage uncertainty: 15 mV per cell for the generic table (PLACEHOLDER) plus I x 0.1 ohm for the resistance guess. |
-| Cutoff | Battery voltage at or below 9.5 V for 30 s. (S1) The slice closes right away, since the pack is empty; the learner then waits for a charge. | From the table (about 1), at least 1 point |
+| `rfFiltDbm` | AD8307 chain, Kalman filtered (existing) | 2 s |
+| `rfRawDbm` | AD8307 chain, raw (existing; sent for the graph, not used in the score) | 2 s |
+| `tempC` | BMP388 `bmp.temperature`, raw (existing; NaN when `bmpOk` is false or a read fails) | 2 s |
+| `battSocPct` | battery estimate (existing, kept from before) | 2 s |
+| UTC time | NTP, new: `configTime(0, 0, "pool.ntp.org", "time.nist.gov")`. Counted as set once `time()` is past 2026-01-01. | on demand |
+| Pass schedule | `data/passes.json` from GitHub Pages, new (14.8) | fetched every 6 h |
 
-**A stretch** is one continuous discharge: from a charge ending (or a start) to the next charge starting (or power off). The charger is inferred from a smoothed V_oc (30 s, so a short load change cannot trip it):
+`rqs.h` is plain C++ with no Arduino headers (like `soh.h` was), so the whole algorithm is tested on a PC. The sketch only gathers inputs, calls `rqs::Engine::step()` once per 2 s sample, and sends the result.
 
-- Plugged in: 60 mV above the stretch's lowest value for 60 s.
-- Gone: 60 mV below the highest charging value, or back under 12.54 V after reaching it, for 60 s.
-- (S1) If the station starts with V_oc at or above 12.54 V, the charger may be on, so it starts in "charging".
-- (S1) No battery reading for 60 s (USB power while flashing, button off) ends the stretch like a power off.
+### 14.4 Step 1: temperature (BMP388 only)
 
-**One slice per stretch.** Start = the first anchor of the stretch (a full anchor if it began from a full charge). End = the anchor that gives the smallest relative error, usually the latest. Slice values: energy E between the two anchors, x = SOE_start - SOE_end, and their uncertainties.
+The thermistors are never used here: not for compensation, not for the health factor, not as a fallback.
 
-- The open slice (the stretch in progress) updates live, so the estimate improves during a discharge instead of only at the end.
-- One slice per stretch, not many small ones, because neighbouring small slices would share anchors and their errors, and the fit would count the same evidence twice.
-- A slice counts only if x is at least 2 points, E at least 0.2 Wh, mean temperature 15 to 35 C, and gaps under 1%. Otherwise it is logged as rejected with the reason.
-- Power off or reboot: the open slice is saved every 5 minutes together with its last good end anchor (energy and SOE from the same moment), so the next boot closes it there without losing accuracy. Energy after that last saved anchor is simply not part of the slice.
+1. **Sanity check** of each raw BMP388 sample. It is rejected if `bmpOk` is false, the read failed (NaN), it is outside -20 to 85 C, or it jumped more than 5 C from the previous in-range sample (2 s earlier).
+2. **Smoothing:** a first-order filter with a 60 s time constant (alpha = 1 - exp(-dt / 60 s)), so sensor noise cannot leak into the score. It starts from the first good sample. (added) If no good sample arrives for 60 s, the filter starts over from the next good one instead of reusing an old value.
+3. **A rejected sample** sets temperature compensation to 0 and H_temp to 1 for that sample, and the site shows "TEMP N/A". Nothing is made up and no old value is reused for that sample. `rqsTempC` is null then.
+4. **Compensation:** rf_comp = rfFiltDbm - ALPHA_T x (T - T_REF), with T the smoothed BMP388 temperature and T_REF 25 C (the datasheet's specification temperature).
 
-### 14.6 How sure each slice is
+ALPHA_T defaults to 0 (no compensation) until the warm-up test fits it. What the AD8307 datasheet says (Rev. D, read 2026-11-01):
 
-- sigma_x = sqrt(sigma_start^2 + sigma_end^2) from the anchors (14.5).
-- sigma_E = 2% of E plus 0.02 Wh (PLACEHOLDER: shunt tolerance and INA219 gain, until calibrated).
-- Anchors on the steep parts of the curve (near full and near empty) have small sigma; anchors on the flat middle have large sigma. The fit then trusts long slices that end low much more than short ones. (This replaces the brief's fixed "above 80% or below 15%" rule.)
+- It promises "highly stable scaling over temperature" but gives no per-degree coefficient.
+- Slope: 23 to 27 mV/dB at 25 C, and 23 to 27 mV/dB over the full -40 to +85 C range. The temperature limits are the same as the part-to-part limits.
+- Intercept: -87 to -77 dBm at 25 C, and -88 to -76 dBm over the full range. The temperature limits are only 1 dB wider at each end.
+- So the AD8307 itself should drift well under 1 dB over a normal day in the box. The warm-up test measures the whole chain anyway (AD8307, LM324 gain stage, mux, ESP32 ADC), because any of them can drift. If the fitted ALPHA_T is smaller than its own uncertainty, it stays 0.
 
-### 14.7 Combining all slices into one score
+**Warm-up test (procedure in `docs/rqs-validation.md`, for Cole):** antenna replaced by a 50 ohm terminator, so the input power is constant. Start the station cold (after a night unpowered, or after an hour in a cooler place), lid on, and log `rfFiltDbm` and the smoothed BMP388 temperature for 2 hours while it warms. Fit rfFiltDbm = a + ALPHA_T x (T - 25) by least squares, with the fit's standard error. Set `RQS_ALPHA_T_DB_PER_C` to the slope only if it is clearly not zero. The firmware prints a CSV line for this (serial `w`, 14.15).
 
-Weighted total least squares, as in Plett 2011. Each slice says "E watt-hours moved the pack x points", and both E and x have errors. The capacity C (Wh at 100 points) that best explains all slices minimizes
+### 14.5 Step 2: causal OS-CFAR baseline
 
-  J(C) = sum over slices of (E_i - C x_i / 100)^2 / (sigma_E,i^2 + (C / 100)^2 sigma_x,i^2)
+- **Ring buffer:** the last 15 minutes of rf_comp, 450 samples at 2 s.
+- **Guard window:** the newest 30 s (15 samples) are left out, so the rising edge of a signal does not lift its own baseline.
+- **Training cells:** every older sample in the ring (up to 435).
+- **baseline** = the 20th percentile of the training cells (an ordered statistic, as in OS-CFAR).
+- **sigma** = 1.4826 x MAD of the training cells (MAD = median absolute deviation from their median; 1.4826 makes it match the standard deviation for normal noise), with a floor SIGMA_MIN = 0.3 dB, because the Kalman filter makes the raw spread very small.
+- **Freeze:** while a detection is active, new samples are not added to the ring, so a pass cannot raise its own baseline. Adding resumes 60 s after the detection clears.
+- (added) **Freeze limit:** adding resumes after 15 minutes of freeze even if the detection is still on. A pass above 5 degrees lasts at most about 13 minutes at 820 km (computed: 23 degrees of Earth central angle each side, 101 minute orbit), so this never cuts a real pass short. Without it, a lasting step in the noise floor (the SAWbird powered on, a new interferer) would keep "detected" on forever.
+- (added) **Warm-up:** no score until the ring holds at least 150 training cells (5 minutes after a start). During warm-up `rqs`, `rfBaselineDbm`, `rfThresholdDbm`, `rfSigmaDb` and `rfExcessDb` are null, `rfDetected` is false, and `rqsLabel` is "WARMING UP".
+- Nothing is saved to flash. After a restart the baseline is learned again in 5 minutes (no flash wear).
+- Why OS-CFAR: Rohling's ordered-statistic CFAR sets the threshold from a ranked reference sample instead of a mean, so one strong sample in the reference cells cannot drag the threshold up. Classic CFAR works on linear power and multiplies; the AD8307 output is already in dB, where that multiplication becomes an addition, so the threshold is baseline + K x sigma.
 
-- Solved by a golden-section search for C between 20% and 160% of 26.6 Wh (a one-number search; at most 32 slices, so it costs nothing on the ESP32). (S1) A coarse scan comes first and the search refines its best dip, because J can have two dips when slices disagree.
-- Uncertainty from the curvature of J at the best C, sigma_C^2 = 2 / J''(C). If the slices disagree more than their sigmas allow (J per degree of freedom above 1), sigma_C is scaled up by the square root of that. Then a floor of 3 points (PLACEHOLDER, for the generic table's shape) is added in quadrature.
-- (S1) **Errors that repeat do not average away.** The INA219 gain (2%) and the voltage table at an anchor are the same in every slice: same pack, same curve. So the plus-or-minus never drops below what the best single slice allows from those two parts. Found in testing: six identical short slices on the simulated pack were all 10 points low, and without this rule the fit claimed plus or minus 4. With it, plus or minus 8.5. What tightens the estimate is a deeper slice, not more of the same.
-- Outliers: a slice whose normalized residual is over 3 is dropped from the fit and logged as an outlier, then the fit runs again once. (S1) Needs at least 3 slices; with 2 there is no telling which one is wrong.
-- (S1) **A real pack change.** If 3 slices in a row are outliers on the same side, the pack itself changed (a failing cell, say): the older slices are cleared and those 3 kept, logged as "pack changed". Without this, a sudden real drop would be rejected forever.
-- Live: the open slice joins the fit once it passes the checks in 14.5 (refit at most every 30 s), so the number improves during a discharge. It is judged for outliers only when it closes.
-- Memory: the last 32 accepted slices. Older ones drop out, so the score follows the pack as it ages.
-- SOH = C / 26.6 x 100, sigma_SOH = sigma_C / 26.6 x 100.
-- Confidence: **none** (no accepted slice yet), **low** (sigma above 6 points), **high** (sigma 6 points or less).
-- Display (Cole's choice): the number shows as soon as there is one accepted slice, always with its plus-or-minus. With confidence none, the pill shows learning progress instead (14.14).
+### 14.6 Step 3: detection with hysteresis
 
-### 14.8 Expected accuracy
+- threshold = baseline + K x sigma, with K = 4.
+- **Detected** after N = 3 samples in a row above the threshold (6 s).
+- **Cleared** after 3 samples in a row below baseline + (K - 1) x sigma (the lower line is the hysteresis, so a signal sitting at the threshold does not flicker).
 
-(S1) Measured on the simulated pack in the PC tests (SYNTHETIC, `npm run test:firmware -- -v`), not on the real pack. The simulated pack is at 94% SOH, its curve sits up to 8 mV per cell off the table, and its resistance is 0.30 ohm against the firmware's 0.25. One slice from a full charge down to each level, then three alike:
+### 14.7 Step 4: sub-scores (each clamped to 0 to 1)
 
-| Use since a full charge | About | One slice | Its error | Three alike | Their error |
-|---|---|---|---|---|---|
-| Down to 91% | 2 hours | plus or minus 19 | -18 | 19.5 | -16 |
-| Down to 85% | 3 hours | 11 | -13 | 11 | -11 |
-| Down to 70% | 6 hours | 7.5 | -8.5 | 7.6 | -6.6 |
-| Down to 30% | 15 hours | 6 | -5 | 6 | -1 |
-| Down to 10% | 19 hours | 4.7 | -1 | 4.7 | 0 |
+- excess = rf_comp - baseline (dB).
+- S_snr = excess / D_FULL_DB, with D_FULL_DB = 12 dB.
+- S_det = 1 while detected, else 0.
 
-- Every error stays within about 1.2 times its plus-or-minus. They are all low because the simulated pack's extra resistance and lower curve make every end point read a little emptier than it is.
-- Three alike are no better than one, on purpose (14.7). A deeper slice is what helps.
-- A discharge to 30% often ends its slice earlier, near 60%, because the table is weak in the flat middle (14.6).
-- The design estimate this replaces said plus or minus 14, 8, 5, 4 and 3.5 for three slices. It counted every error as random, which they are not.
-- If the real pack's curve differs from the table by more than 15 mV per cell, the true error is larger. The disagreement test in 14.7 widens the plus-or-minus only when slices disagree with each other.
+### 14.8 Step 5: pass match
 
-### 14.9 Cycles
+**Schedule file.** The deploy workflow (already runs every 6 h for the orbit data) also writes `site/data/passes.json` for the next 48 hours, using the same SGP4 code and the same rounded station coordinates as the website (33.92 N, 84.84 W), minimum elevation 5 degrees:
 
-Equivalent full cycles = cumulative discharged Wh / 26.6, saved to flash. Energy drawn while the firmware thinks the charger is connected is not counted, because the charger supplies the load then. Charger detection is inferred, so this can overcount if a charge is missed.
+```json
+{
+  "source": "SGP4 (satellite.js) from CelesTrak GP data",
+  "generated": 1793500000, "validUntil": 1793672800, "noradId": 59051,
+  "tleEpoch": "2026-10-30T22:38:57Z", "minEl": 5, "step": 30,
+  "passes": [ { "aos": 1793512345, "los": 1793513012, "maxEl": 42.7, "el": [5.0, 8.1, 11.6, 15.2] } ]
+}
+```
 
-### 14.10 Persistence (Preferences namespace "station")
+- Times are Unix seconds, UTC. `el` holds the elevation every 30 s from `aos`, ending at `los`.
+- About 8 to 12 passes in 48 hours, about 3 KB.
+- (added) A pass in progress when the file is made starts at the file's start time, so it is not lost.
+- If CelesTrak fails, the workflow keeps the committed orbit data (existing rule) and the schedule is made from it; the station checks `validUntil`.
 
-Each blob starts with a version byte and ends with a CRC32, so an old or corrupt value resets cleanly instead of loading garbage. Keys are at most 15 characters.
+**On the ESP32.**
 
-| Key | Holds | Written |
+- Fetched over HTTPS (`WiFiClientSecure` with the core's built-in certificate bundle) every 6 hours by the upload task. (added) After a failed fetch it retries every 15 minutes.
+- Parsed by a small hand-written parser in `rqs.h` (no JSON library). Kept in RAM only: up to 24 passes of up to 40 elevations each (about 4 KB).
+- The address is `PASSES_URL` in `secrets.h` (O18). It is not secret, but it is per-install. It stays empty until Pages is enabled.
+- A schedule is valid only if the clock is set (NTP), it parsed cleanly, and now is before its `validUntil`.
+
+**Expected power during a pass (Friis).** In free space, received power falls as 1 / r^2, so relative to the satellite straight overhead:
+
+  E(t) = -20 x log10( r(el) / r_zenith )
+
+  r(el) = sqrt( (Re + h)^2 - (Re x cos(el))^2 ) - Re x sin(el), with Re = 6371 km, h = 820 km, r_zenith = h
+
+- el(t) comes from the schedule, linearly interpolated between the 30 s points.
+- E is 0 dB overhead and -10.75 dB at 5 degrees elevation, where the range is 2,825 km (computed from the formula). A low pass that peaks at 15 degrees spans only -10.75 to -8.05 dB.
+
+**Correlation.**
+
+- Inside a pass window (aos <= now <= los), each sample adds the pair (excess, E). The pairs are cleared when a new pass starts.
+- Pearson r is computed over the pass so far, kept as running sums, so it costs nothing per sample.
+- It needs at least 10 pairs (20 s). Before that, and when either value has not varied at all, r is null (added: S_shape is then 0).
+- S_shape = clamp((r - 0.3) / 0.6).
+- S_pass:
+
+| State | S_pass | Tag |
 |---|---|---|
-| `remWh` (exists) | energy left for the existing estimate | unchanged |
-| `sohState` | cycle Wh, recent outliers (for the pack-change rule), the last slice result and whether it reached Firebase. (S1) The fit is not stored: it is recomputed from `sohSlices` at start. About 57 bytes. | when a slice closes or its log record is sent; otherwise at most every 30 min (S1, was 5), only if cycle Wh moved by 0.05 Wh or more |
-| `sohSlices` | the last 32 accepted slices (E, x, sigma_E, sigma_x, start kind): 550 bytes when full | when a slice closes |
-| `sohOpen` | the open slice: start anchor and best end anchor, each with its energy, Ah, time, gap and temperature totals; why anchors were refused. About 140 bytes. | as soon as the start anchor is found, then at most every 5 min; removed when it closes |
+| Inside a pass window | 0.4 + 0.6 x S_shape | PASS |
+| Valid schedule, outside every pass | 0 | NO PASS |
+| No valid schedule (no file, no clock, expired, parse error) | 0.5 | NO SCHEDULE |
+| Test mode (serial `t`, for the NanoVNA demo) | 0.5 | TEST |
 
-Flash wear: (S1) about 340 small writes a day for battery health, on top of the 288 for `remWh`. The NVS layer spreads writes over its pages, so this stays far below the flash's rated erase cycles.
+- Test mode is never saved (added), so a restart always ends it.
+- Pearson r measures shape, not level, so a strong but flat signal during a pass does not get full marks. A signal that rises and falls with the predicted curve does.
 
-### 14.11 Serial commands
+### 14.9 Step 6: health factor
 
-| Key | Action |
+H = H_batt x H_temp.
+
+- **H_batt:** 1 at a charge of 20% or more, falling in a straight line to 0.5 at 0%. (added) If the charge is unknown (INA219 missing), H_batt is 1 and the site shows "BATT N/A", the same rule as the temperature.
+- **H_temp:** 1 up to 45 C, falling in a straight line to 0.7 at 60 C, and (added) staying at 0.7 above 60 C. It uses the smoothed BMP388 temperature (box air). It is 1 when the BMP388 is unavailable or its sample was rejected (14.4).
+
+### 14.10 Step 7: score, label and tag
+
+  RQS = 100 x H x (0.50 x S_snr + 0.20 x S_det + 0.30 x S_pass x S_det), clamped to 0 to 100, sent with one decimal.
+
+(built) **The pass part counts only while something is detected** (the "x S_det" above). Found by the PC tests: with the brief's formula, plain noise with no schedule scored 15.8 (WEAK), because NO SCHEDULE alone gives 0.30 x 0.5 = 15 points, and noise during a pass could reach WEAK too, because random noise correlates a little with the curve. With the change, noise stays NO SIGNAL in every case (worst 4.5 in the tests), and everything the brief intended still holds: a strong signal outside a pass scores at most 70, with no schedule at most 85, and a matching pass up to 100. `rqsPass` is still sent as the pass part itself, so the bar shows how well the pass matches; the "Why this score?" panel says it only counts while a signal is detected.
+
+| RQS | Label |
 |---|---|
-| `h` | Print SOH debug: fit result, every stored slice, the open slice, and which anchor checks fail right now. |
-| `z` | Reset all SOH state. Asks for `y` within 10 s; anything else cancels. |
+| under 15 | NO SIGNAL |
+| 15 to under 40 | WEAK |
+| 40 to under 70 | GOOD |
+| 70 and above | STRONG |
+| no score yet (warm-up) | WARMING UP (added) |
 
-### 14.12 Data contract (O9: separate nodes, approved)
+- Outside a pass, S_pass is 0, so even the strongest signal scores at most 70 and is tagged NO PASS. That is intentional: a strong signal when no satellite is overhead is more likely interference. The site explains this.
+- With no schedule, the most is 85. In a pass with a signal that follows the curve, 100.
 
-`/station/latest` and `/station/history` do not change.
+### 14.11 Constants (top of `rqs.h`)
 
-`/station/health`, overwritten at most once a minute when something changed, and right after a slice closes (about 230 bytes):
+| Constant | Value | Status |
+|---|---|---|
+| `RQS_RING_N` | 450 (15 min at 2 s) | PLACEHOLDER |
+| `RQS_GUARD_N` | 15 (30 s) | PLACEHOLDER |
+| `RQS_MIN_TRAIN_N` | 150 (5 min) | PLACEHOLDER (added) |
+| `RQS_BASE_PCT` | 20 | PLACEHOLDER |
+| `RQS_MAD_SCALE` | 1.4826 | fixed (normal-noise consistency) |
+| `RQS_SIGMA_MIN_DB` | 0.3 | PLACEHOLDER |
+| `RQS_K` | 4 | PLACEHOLDER |
+| `RQS_N_ON`, `RQS_N_OFF` | 3, 3 | PLACEHOLDER |
+| `RQS_UNFREEZE_S` | 60 | PLACEHOLDER |
+| `RQS_MAX_FREEZE_S` | 900 | PLACEHOLDER (added) |
+| `RQS_D_FULL_DB` | 12 | PLACEHOLDER |
+| `RQS_W_SNR`, `RQS_W_DET`, `RQS_W_PASS` | 0.50, 0.20, 0.30 | PLACEHOLDER |
+| `RQS_PASS_BASE`, `RQS_CORR_LO`, `RQS_CORR_SPAN`, `RQS_CORR_MIN_N` | 0.4, 0.3, 0.6, 10 | PLACEHOLDER |
+| `RQS_PASS_UNKNOWN` | 0.5 (NO SCHEDULE and TEST) | PLACEHOLDER |
+| `RQS_RE_KM`, `RQS_ORBIT_H_KM` | 6371, 820 | fixed (mean Earth radius; Meteor-M2-4 orbit height) |
+| `RQS_ALPHA_T_DB_PER_C` | 0 | PLACEHOLDER until the warm-up test |
+| `RQS_T_REF_C` | 25 | fixed (datasheet specification temperature) |
+| `RQS_TEMP_TAU_S`, `RQS_TEMP_MIN_C`, `RQS_TEMP_MAX_C`, `RQS_TEMP_JUMP_C` | 60, -20, 85, 5 | PLACEHOLDER |
+| `RQS_BATT_FULL_PCT`, `RQS_BATT_H_EMPTY` | 20, 0.5 | PLACEHOLDER |
+| `RQS_HOT_START_C`, `RQS_HOT_END_C`, `RQS_H_HOT` | 45, 60, 0.7 | PLACEHOLDER |
+| `RQS_LABEL_WEAK`, `RQS_LABEL_GOOD`, `RQS_LABEL_STRONG` | 15, 40, 70 | PLACEHOLDER |
+| `RQS_SCHED_EVERY_S`, `RQS_SCHED_RETRY_S` | 21600, 900 | PLACEHOLDER |
+| `RQS_MAX_PASSES`, `RQS_MAX_EL` | 24, 40 | fixed (memory sizes) |
+
+### 14.12 Data contract (needs Cole's OK: it adds fields)
+
+Added to `/station/latest` and every `/station/history` record:
 
 | Key | Type | Meaning |
 |---|---|---|
-| `ts` | ms epoch | Server time of this write |
-| `battSohPct` | number or null | SOH from the fit, raw (can be above 100). Null while confidence is none. |
-| `battSohSigmaPct` | number or null | Its plus-or-minus, in points |
-| `battSohConf` | "none", "low", "high" | Confidence (14.7) |
-| `battCapWhEst` | Wh or null | Fitted usable energy |
-| `battCycles` | number | Equivalent full cycles |
-| `battSohSlices` | count | Slices in the fit |
-| `battSohProgressPct` | 0 to 100 | Progress of the open slice toward being usable; 100 once usable. (S1) The first half fills during the 60 min settle time (finding a start point), the second half as the slice grows to 2 points and 0.2 Wh. |
-| `battSohLearn` | "waiting", "discharging", "charging" | What the learner sees now |
-| `inaCal` | bool | False while the INA219 gain and offset are placeholders |
+| `rqs` | 0 to 100 or null | The score, one decimal. Null during warm-up. |
+| `rqsLabel` | text | NO SIGNAL, WEAK, GOOD, STRONG, or WARMING UP |
+| `rqsTag` | text | PASS, NO PASS, NO SCHEDULE, or TEST |
+| `rfExcessDb` | dB or null | rf_comp minus baseline |
+| `rfBaselineDbm` | dBm or null | The OS-CFAR baseline |
+| `rfThresholdDbm` | dBm or null | baseline + K x sigma |
+| `rfSigmaDb` | dB or null | The robust spread, after its floor |
+| `rfDetected` | bool | Detection state (14.6) |
+| `passElDeg` | degrees or null | Expected elevation now, inside a pass window only |
+| `passCorr` | -1 to 1 or null | Pearson r over the pass so far |
+| `nextPassEpoch` | Unix seconds or null | AOS of the next pass that has not started yet |
+| `rqsTempC` | C or null | The smoothed BMP388 value the score used; null when the sample was rejected |
 
-`/station/healthLog/<pushId>`, one record per closed slice (about 190 bytes): `ts`, `ok` (bool), `why` (reason when rejected or an outlier), `start` ("full" or "rest"), `e` (Wh), `ah`, `x` (SOE points), `sx` (its sigma), `sliceSohPct` (this slice alone: E / x scaled to SOH), `fitSohPct` and `fitSigmaPct` (the fit after this slice; null after a `z` reset), `tempC` (mean), `hours`.
+Added to `/station/latest` only (Cole, 2026-11-01), for the four bars on the site: `rqsSnr`, `rqsDet`, `rqsPass`, `rqsHealth` (each 0 to 1, two decimals; null during warm-up).
 
-(S1) Details:
+Removed: `/station/health` and `/station/healthLog` with their read rules (D21).
 
-- `why` is one of: "too small", "gaps in the data", "no temperature", "too cold", "too hot", "outlier", "no start point: <check>", "no end point: <check>" (the anchor check that failed most, for example "current not steady"). On an accepted slice it is usually null, or "an older outlier slice was dropped" or "pack changed: older slices cleared".
-- A stretch that never found a start point is logged only if it ran past the 60 min settle time, so restarts while flashing do not fill the log.
-- A `z` reset appends one record with `why` "reset" and every value null. The chart breaks its line there.
-- `ts` is the server time when the record reached Firebase. A record that waited for WiFi keeps its values but gets the later time. Only the newest record waits; an older unsent one is replaced.
-- Measured sizes: a health node 206 bytes, a log record about 180 to 230 bytes with its key.
+`/station/meta` also carries `rqsAlphaT`, the compensation in use in dB per C (O19, decided): the site shows "compensation off (not measured yet)" while it is 0.
 
-Read rules (section 5, approved with O9): `health` public, `healthLog` only through a `ts`-ordered query of at most 500 records.
+Measured (2026-11-01, PC tests): the 12 fields add 220 bytes to a record, the 4 parts 60 more to `latest`.
 
 ### 14.13 Budget
 
-| Item | Today | With battery health |
+| Item | Before | With the RQS |
 |---|---|---|
-| History growth | 3.8 MB/day, 1 GB in about 262 days | plus about 0.01 MB/day (a few log records) |
-| One open tab, per day | 18 MB | plus at most 0.33 MB (usually about 0.04) |
-| 24 h history load | 3.8 MB | same; the health log fetch is under 100 KB |
+| History record | 417 bytes (441 stored) | about 637 (661 stored) |
+| `/station/latest` | 417 bytes | about 697 |
+| History growth | 3.8 MB/day, 1 GB in about 262 days | about 5.7 MB/day, 1 GB in about 175 days |
+| One open tab | 18 MB/day | about 30 MB/day (0.9 GB/month), so about 5 tabs fill 50% of the download limit |
+| 24 h history load | 3.8 MB | about 5.7 MB |
 
-Measured: a health node is about 206 to 227 bytes, a health log record about 180 to 230 bytes with its key. For comparison, the six fields in every record (the brief's layout) would have added 121 bytes per record: 4.9 MB/day of history and 23 MB/day per open tab.
+(built) Measured 2026-11-01 from the firmware's own RQS JSON in the PC tests, added to the 417 byte record measured on 2026-10-31. Kept: all 12 fields in history (O19). If the budget gets tight, `rqsLabel` and `rfThresholdDbm` could leave history (the site can work them out), saving about 50 bytes per record.
 
 ### 14.14 Website
 
-**Pill** next to the battery percent, a button that opens the detail panel:
+**RQS instrument, the hero (top of the page, beside the globe on wide screens, first on phones):**
 
-| State | Pill shows |
+- A large gauge from 0 to 100 with four colour bands that match the labels, the number in the middle, and the label and tag beside it in words (never colour alone).
+- Four small bars: Strength (rqsSnr), Detection (rqsDet), Pass match (rqsPass), Health (rqsHealth), each with its value.
+- A 30 minute sparkline of `rqs`, from the history the page already loads plus live points. (built) The history query always covers at least 30 minutes, so the 15 minute range loads 30 minutes (about 120 KB) instead of a second query.
+- Next pass time (from `nextPassEpoch`), and the expected elevation during a pass.
+- "Why this score?", a panel in plain words: what each part means and its value now; the NO PASS rule ("a strong signal outside a pass window can score at most 70, because it is more likely interference"); the temperature note ("box air at the BMP388, not the AD8307; compensation on or off"; "TEMP N/A" when the sample was rejected); "BATT N/A" when the charge is unknown; WARMING UP explained; NO SCHEDULE explained (no clock, no file yet, or expired); TEST explained.
+- Null or offline: greyed like the other cards, last values readable. Records without RQS fields (older firmware) show "--".
+
+**Kept:** the S-meter, the rings and the beam, now driven by `rfExcessDb` (F4).
+
+**RF graph:** the raw and filtered lines, plus the baseline and threshold lines, shaded pass windows (where `passElDeg` is not null) and shaded detections (where `rfDetected` is true).
+
+**RQS history chart:** `rqs` over the chosen range, with faint lines at 15, 40 and 70.
+
+**Detection log**, under the radio graphs, built from the loaded history (Cole, 2026-11-01): start time, duration, peak excess, peak RQS, and whether it was in a pass. It covers the chosen graph range. A detection shorter than the 10 s history step can be missed; the log says so.
+
+**Data:** no new listener or node. Everything rides on the existing `latest` stream and history queries. Fixtures carry made-up RQS values for every state and stay labeled TEST FIXTURE DATA. (built) The fixture's made-up pass schedule is not the real orbit, so in the fixture preview the globe can show the satellite below the horizon while the score says PASS.
+
+### 14.15 Serial commands and LCD
+
+| Key | Action |
 |---|---|
-| Confidence high or low | "SOH 94% ±6" with a small "est." |
-| Confidence none | "SOH learning 42%" (progress of the first slice) |
-| No health data (node missing or null) | "SOH --" |
-| Station offline | grey, like the other cards |
+| `t` | Toggle TEST MODE (S_pass 0.5, tag TEST). Not saved. For the NanoVNA demo. |
+| `q` | (added) Print the RQS state: baseline, sigma, threshold, freeze state, every part, the schedule (valid or why not, next 3 passes), the clock. |
+| `w` | (added) Toggle a CSV line every 2 s for the warm-up test: `WARM,ms,rfFilt,rfRaw,tempRaw,tempSmooth,rfComp`. |
+| `h`, `z` | Removed with battery health. |
 
-Colors (O12, approved), never by color alone (the band name is in the panel and in the screen-reader label):
+The LCD gets a full redesign from Cole (15.1); the RQS is on its first page.
 
-- 80% and above: good. Cited: the USABC manual puts end of life at 80% of rated capacity.
-- 60% to 80%: fair. Still works, with less runtime.
-- Under 60%: replace. Not cited: no free, checkable source was found (IEC 61960-3 reportedly uses 60% in its endurance test, but it is paywalled and secondary sources disagree). This line is a project choice, and the spec and report say so.
+### 14.16 Tests
 
-**Panel** (tap or click the pill; hover also opens it on a desktop; Escape or a click outside closes it): estimated usable energy with its plus-or-minus against 26.6 Wh rated, equivalent cycles, confidence in words, slices used, what the learner sees now, last update (from the newest log record), the last slice's result and reason, "uncalibrated" while `inaCal` is false, and one line: "Estimate from voltage and current, not a lab capacity test." No resistance (Cole's choice).
+- **Firmware logic on the PC:** `tests/firmware/rqs_test.cpp`, compiled with warnings as errors (`npm run test:firmware`, in CI). Every input is SYNTHETIC and labeled. Cases:
+  - percentile and MAD with the guard window left out;
+  - the sigma floor;
+  - freeze while detected, unfreeze 60 s after clearing, and the 15 minute freeze limit;
+  - N in a row to detect, and the hysteresis to clear;
+  - warm-up;
+  - the Friis range function at 90, 5 and 0 degrees;
+  - Pearson r (perfect, opposite, flat, fewer than 10 pairs);
+  - the composite score at known parts, the label edges, and the tag logic (in pass, out of pass, no schedule, expired, no clock, test mode);
+  - BMP388 unavailable (compensation off, H_temp 1, `rqsTempC` null), out of range, and a jump;
+  - the 60 s smoothing;
+  - the schedule parser on good, cut-short and junk input;
+  - a full synthetic pass that is detected, matches the curve, and scores STRONG, PASS;
+  - the same rise outside a pass, which scores at most 70, NO PASS;
+  - the JSON for the new fields, and its measured size.
+- **Pass schedule generator:** unit tests that `tools/make-passes.mjs` agrees with the site's own pass finder and keeps the file small.
+- **Firmware build:** `arduino-cli compile` with all warnings, none from the sketch or `rqs.h`.
+- **Website unit tests:** RQS view logic (label, tag text, bars, Why panel lines, detection log from history).
+- **Playwright, desktop and phone:** the hero in every state (WARMING UP, NO SIGNAL, WEAK, GOOD, STRONG; PASS, NO PASS, NO SCHEDULE, TEST; TEMP N/A; BATT N/A; null; offline; older record without RQS fields); the Why panel opens and closes; the sparkline; the RF overlays; the RQS chart; the detection log; no console errors; no sideways scroll at 360 px.
 
-**Battery health chart:** a new "Battery health" tab in the graphs section, always all-time (the 15 min to 24 h buttons do not apply there and say so). The fitted SOH as a stepped line with its plus-or-minus as a shaded band; each slice's own value as a point (filled circle for slices from a full charge, hollow triangle for slices from a rest point, with a legend); a dashed 80% line labeled "end-of-life line (USABC)". The line breaks after a `z` reset. Rejected slices are listed under the chart with their reasons.
+### 14.17 Known limits
 
-**Data:** a listener on `/station/health` (tiny, changes rarely). (S3) The health log uses one `onChildAdded` listener on the allowed query (`orderByChild("ts")`, `limitToLast(500)`) instead of a fetch per closed slice: it downloads the newest records once (under about 115 KB), then only each new record (about 200 bytes). Config: `soh: { ratedWh: 26.6, goodAtOrAbovePct: 80, replaceBelowPct: 60, logLimit: 500 }`. If the health rules are missing, only the pill shows "--"; the rest of the page keeps working and Diagnostics shows the error.
+- Broadband only: the score cannot prove the source. The pass tag and correlation are evidence, not proof.
+- The BMP388 reads box air at its own spot, not the AD8307 die (14.2).
+- ALPHA_T is 0 until the warm-up test; until then there is no compensation at all.
+- The antenna pattern is not modelled, so a real pass will not follow the distance curve exactly.
+- Every weight and threshold is a guess until real passes are logged (O17).
+- Kalman lag: detection starts some seconds after a real rise.
+- After a restart, there is no score for 5 minutes (warm-up).
+- No schedule until Pages is live and `PASSES_URL` is set (O18). Until then every score is tagged NO SCHEDULE and capped at 85.
+- The schedule is only as good as the orbit data; the workflow refreshes it every 6 hours, but GitHub can pause schedules on a quiet repo (A8). The station checks `validUntil`.
 
-(S3) Built details: the pill shows at most 100% and never "±0"; a dashed pill border means confidence "low". The panel's rows are Health (number and band in words), Usable energy, Confidence, Slices used, Cycles, Now, Last update, Last discharge. The chart's fitted line runs on to the present and steps at each record; under it, "Discharges not used" lists the 8 newest rejected slices and resets with their reasons. Diagnostics shows the number of health log records.
+### 14.18 References (each checked on 2026-11-01)
 
-### 14.15 Tests
+1. H. Rohling, "Radar CFAR Thresholding in Clutter and Multiple Target Situations," *IEEE Transactions on Aerospace and Electronic Systems*, vol. AES-19, no. 4, pp. 608-621, July 1983. doi:10.1109/TAES.1983.309350.
+   Used for the ordered-statistic CFAR: a ranked reference sample sets the threshold, so a few strong samples cannot raise it. Checked: Crossref record (title, author, volume, issue, pages, date). This project adapts it to a log detector and one time series (14.5).
+2. H. T. Friis, "A Note on a Simple Transmission Formula," *Proceedings of the IRE*, vol. 34, no. 5, pp. 254-256, May 1946. doi:10.1109/JRPROC.1946.234568.
+   Used for the expected power curve: in free space, received power falls with the square of the distance (14.8). Checked: Crossref record.
+3. Analog Devices, *AD8307: Low Cost, DC to 500 MHz, 92 dB Logarithmic Amplifier*, data sheet. Rev. D (2008) was read; analog.com lists Rev. F as current.
+   Used for the slope (25 mV/dB) and intercept (-84 dBm) already in the firmware, and their limits over temperature (14.4). Checked: the Rev. D PDF (via an Octopart mirror, because analog.com timed out), specification table: slope 23 to 27 mV/dB at 25 C and over temperature; intercept -87 to -77 dBm at 25 C and -88 to -76 dBm over temperature; operating range -40 to +85 C. A search listing of analog.com's own PDF names it Rev. F, but the download timed out, so Rev. F was not read. Re-read these values from Rev. F before the final course report.
+4. P. J. Rousseeuw and C. Croux, "Alternatives to the Median Absolute Deviation," *Journal of the American Statistical Association*, vol. 88, no. 424, pp. 1273-1283, 1993. doi:10.1080/01621459.1993.10476408.
+   Used for the 1.4826 factor that scales the MAD to match a standard deviation for normal noise. Checked: Crossref record.
 
-- **Firmware logic on the PC:** `soh.h` is plain C++ with no Arduino headers. `tests/firmware/soh_test.cpp` compiles it with the system compiler, warnings as errors (`npm run test:firmware`, also in CI). (S1) The discharge curves are not stored files: `tests/firmware/pack_sim.h`, a simulated 3S pack with a known true SOH, a CC/CV charger and the station's load, makes them while the tests run. It is labeled SYNTHETIC, and there is nothing that could be mistaken for data. Cases (137 checks, all passing):
-  - a full discharge recovers the true SOH within its plus-or-minus;
-  - short slices give a wide plus-or-minus; repeating them does not shrink it, and a deep discharge afterwards does (S1, see 14.7);
-  - rejections: too cold, too hot, no temperature, too small, unstable current (no anchors), gaps;
-  - charger plugged in mid-stretch closes the slice at the last good anchor;
-  - reboot mid-stretch closes the slice at the saved anchor;
-  - an outlier slice is dropped; the fit follows when the true capacity drops (aging), and when it drops suddenly (pack change);
-  - persistence round trip, and a corrupt, cut-short, missing or wrong-version blob resets;
-  - (S1) starting while on the charger; a partial charge is not a full anchor; a lost battery reading; the JSON for both nodes; the `h` report; the accuracy table in 14.8.
-- **Firmware build:** `arduino-cli compile` stays clean (no new warnings).
-- **Website unit tests:** band and pill text for every state.
-- **Playwright:** pill in each state (none, low, high, null, offline); panel opens and closes (click, Escape); health chart renders with a gap; no console errors. Fixtures labeled as before.
+### 14.19 Validation (Cole runs these; `docs/rqs-validation.md`)
 
-### 14.16 Known accuracy limits
+The procedure document has empty tables and no numbers. Real results go in `docs/validation/` only after Cole runs them.
 
-- The generic voltage table can be off by tens of millivolts per cell for this pack. That is the biggest error source, especially for short slices.
-- Slices that end in the flat middle of the curve (about 40 to 60%) are weak; the uncertainty reflects it.
-- Until the INA219 is calibrated, every energy number carries the shunt tolerance (about 1%) and the INA219 gain error.
-- SOH here is energy based (what the station cares about). Papers usually report capacity (Ah); the log keeps both. Energy SOH falls a little faster than capacity SOH because rising resistance also lowers the voltage.
-- Temperature is the box air, not the cells.
-- Charging is inferred. A missed charge would usually show up as a voltage rise and close the slice, but it can overcount cycles.
-- A 3S pack is limited by its weakest cell; the estimate is for the pack as a whole, which is what matters to the station.
-- Discharging below about 9.5 V is never needed, and the firmware never asks for it.
-- (S4) **Repeating errors are the main limit.** The voltage table, the resistance guess and the INA219 gain are the same in every slice, so more slices of the same kind do not make the estimate better; deeper discharges do (14.7). On the simulated pack every error was on the low side and stayed within about 1.2 times its plus-or-minus (14.8).
-- (S4) Every accuracy number in this section comes from a simulated pack in the PC tests, not from the real one. The real pack's curve, resistance and charger behaviour are unknown until the tests in 14.18 are done.
-- (S4) A full start assumes the charger tops the pack off within 20 minutes of reaching 12.54 V (`SOH_FULL_HOLD_S`, PLACEHOLDER). A charger that stops early makes every slice that starts from full read a little low.
+- **(a) NanoVNA CW test.** NanoVNA as a signal source, start = stop = 137.5 MHz. The open cable end is held at 5 m, 3 m and 1 m from the antenna. For each: wait for the score to settle, put the station in TEST MODE (`t`), and record `rfRawDbm`, `rfExcessDb` and `rqs` in a table. Expected: higher excess and score as the cable gets closer. This is not a calibration: the NanoVNA output level and the near-field coupling are not known well.
+- **(b) Warm-up test for ALPHA_T** (14.4), with the 50 ohm terminator and the `w` CSV.
+- **(c) A real pass log:** pick a pass over 30 degrees from the site's table, leave the antenna up, log the history across it, and fill in the detection start, peak excess, `passCorr` and peak RQS.
 
-### 14.17 References (each checked on 2026-10-31)
+### 14.20 Plan (after Cole approves)
 
-1. G. L. Plett, "Recursive approximate weighted total least squares estimation of battery cell total capacity," *Journal of Power Sources*, vol. 196, no. 4, pp. 2319-2331, 2011. doi:10.1016/j.jpowsour.2010.09.048.
-   Used for the core method: capacity from accumulated charge versus change in SOC over partial segments, where both carry errors, weighted by uncertainty, so no full discharge is needed. Checked: Crossref record; the method as described in the matching patent (US 8,041,522) and in MathWorks' implementation. This project solves the weighted total least squares cost directly by a one-number search over a small stored set of slices, instead of Plett's recursive approximation.
-2. K. S. Ng, C.-S. Moo, Y.-P. Chen, Y.-C. Hsieh, "Enhanced coulomb counting method for estimating state-of-charge and state-of-health of lithium-ion batteries," *Applied Energy*, vol. 86, no. 9, pp. 1506-1511, 2009. doi:10.1016/j.apenergy.2008.11.021.
-   Used for the SOH definition: health from the capacity the pack actually releases, measured by counting what it delivers. Checked: Crossref record, and the abstract on RePEc ("the state-of-health (SOH) is evaluated by the maximum releasable capacity").
-3. United States Advanced Battery Consortium, *Electric Vehicle Battery Test Procedures Manual*, Revision 2, January 1996. Glossary, Appendix F: end of life is when the net delivered capacity is less than 80% of rated capacity, or peak power is less than 80% of rated.
-   Used for the 80% line. Checked: read in the PDF published on uscar.org. Caveat: an electric-vehicle convention; one recent paper says later revisions dropped the fixed percentage (not confirmed).
-
-Not cited: IEC 61960-3 (paywalled, could not be checked).
-
-### 14.18 Tests only Cole can run (on the real station)
-
-1. INA219 two-point calibration against a meter in series (sets the gain and offset; every SOH number depends on it).
-2. Measure the charger's full voltage at the jack. Full anchors assume about 12.6 V; below 12.54 V they never trigger.
-3. Normal use for a few charge cycles: check that `healthLog` gets one record per discharge, and that the plus-or-minus shrinks after deeper discharges.
-4. Plug the charger in partway through a discharge: the slice should close at its last good anchor.
-5. Power-cycle with the button during a discharge: the slice should close at its saved anchor and a new one start.
-6. Confirm the BMP388 reads sensible air temperature.
-7. (S4) Compare the INA219 battery voltage with a meter at the pack, a few times. The anchors read the voltage table, so an offset of 30 mV on the pack (10 mV per cell) can move an anchor by a few points.
-8. (S4) During a charge with the station on, run `h`: it shows "held full x of 20 min". If it never reaches 20, the charger stops early or holds below 12.54 V (test 2).
-9. (S4) After the first day of normal use, run `h` while discharging: "anchor check now" should say "ok" most of the time. If "current not steady" or "voltage rising" keeps showing, the rest-point thresholds need tuning for this station.
-
-### 14.19 Plan (after approval)
-
-One local commit per step, after Cole approves this section.
+No commits until Cole approves (his rule for this task).
 
 | Step | Work | Acceptance |
 |---|---|---|
-| S1 | `soh.h` pure logic, synthetic curve generator, C++ tests | All firmware tests pass on the PC. Done 2026-11-01: 137 checks pass with clang and GCC, and `soh.h` compiles for the ESP32 with all warnings on and none reported. |
-| S2 | Firmware: INA219 averaging, SOH wiring, persistence, `h` and `z`, health uploads, version 1.1 | Compiles with no new warnings; secret scan passes. Done 2026-11-01: 1,112,128 bytes of flash (84%), 55,424 bytes of RAM (16%), no warnings from the sketch or `soh.h`. The battery estimate now shares the voltage table and the 0.25 ohm placeholder with `soh.h`. Not run on the station. |
-| S3 | Website: data source, pill and panel, health chart tab, fixtures | Unit and Playwright tests pass at both sizes, no console errors. Done 2026-11-01: 23 unit tests and 32 browser tests pass (4 new browser tests at both sizes); no console errors; no sideways scroll with the panel open on a 360 px phone. |
-| S4 | Docs: README, firmware README, this section marked built; final report | Report lists what was verified, what was not, and the accuracy limits. Done 2026-11-01: see 14.20. |
+| R0 | Remove battery health from the firmware, site, tests and docs (14.21); keep the INA219 averaging and the PC test runner | Firmware compiles with no warnings; all remaining tests pass. Done. |
+| R1 | `rqs.h` and its PC tests | All cases in 14.16 pass with clang and GCC. Done: 142 checks. |
+| R2 | `tools/make-passes.mjs`, the workflow step, firmware 1.2 (NTP, schedule fetch, RQS fields, `t`, `q`, `w`, the new LCD pages, the renamed thermistor offset) | Compiles with no warnings; secret scan passes. Done. |
+| R3 | Website: hero, Why panel, overlays, RQS chart, detection log, fixtures, tests | Unit and Playwright tests pass at both sizes, no console errors. Done. |
+| R4 | Calibration sketches (15.2) | Both compile with no warnings. Done. |
+| R5 | Docs: validation procedures, both READMEs, build report | Report lists what was verified and what only Cole can verify. Done: 14.22. |
 
-### 14.20 Build report (2026-11-01)
+### 14.21 Removed: battery state of health (D21)
 
-**Verified:**
+- Firmware: `soh.h`, the health section of the sketch, the `/station/health` and `/station/healthLog` uploads, the `sohState`, `sohSlices` and `sohOpen` flash keys, the `h` and `z` commands, and the Health line in the Serial print. (No board ever ran 1.1, so no board holds those keys.)
+- The voltage table moves back into the sketch. `BATT_R_INT_OHM` gets its 0.25 ohm placeholder back directly.
+- Site: the health pill, panel and chart tab, `lib/health.js`, `ui/health.js`, the health listeners, the `soh` config, and the health fixtures.
+- Tests: `soh_test.cpp`, `pack_sim.h`, `health.test.mjs`, and the four health browser tests.
+- Docs: the health rules, nodes, keys and placeholders in both READMEs. The old design stays readable in git history (commits 6ff2797 to 7213c52).
+- Fields the brief named (`battSohPct`, `battSohConf`, `battCapWhEst`, `battRintMohm`, `battCycles`, `battSohProgressPct`): none are in `latest` or `history`. The ones that existed lived only in `/station/health`, which goes away. `battRintMohm` was never built.
+- Kept: the battery estimator (SOC, hours left), the INA219 128-sample averaging, and the firmware test runner (`tests/firmware/run.mjs`).
 
-- The logic in `soh.h`: 137 checks on a simulated pack (SYNTHETIC), with clang on the Mac and with GCC; listed in 14.15. A full discharge of the simulated pack at 94% SOH gave 92.9 plus or minus 3.8.
-- Firmware 1.1 compiles for the ESP32 with no warnings from the sketch or `soh.h`: 1,112,128 bytes of flash (84%), 55,424 bytes of RAM (16%).
-- The website: 23 unit tests and 32 browser tests (desktop and 360 px phone) against labeled fixtures, including every pill state, the panel, the chart with a reset break, and no console errors.
-- The three references (14.17), checked on 2026-10-31.
+### 14.22 Build report (2026-11-01)
 
-**Not verified (needs the station, 14.18):**
+**Verified (on a PC, against labeled fixtures, and by compiling):**
 
-- Nothing in 1.1 has run on the ESP32: INA219 averaging, flash saves, uploads, `h` and `z`.
-- The real pack's curve and resistance, the charger's full voltage and how long it holds it, and the BMP388 as the temperature gate.
-- The INA219 is uncalibrated, so every energy number carries its gain error, and the website says so.
-- The live data source has only been syntax-checked: there is no Firebase project yet (O1), so `/station/health` and `/station/healthLog` have never been read for real.
+- Firmware 1.1 compiled before any change (the brief thought it did not): 1,112,112 bytes of flash, no warnings from the sketch.
+- `rqs.h`: 142 checks with SYNTHETIC inputs (`npm run test:firmware`), every case in 14.16. Built with clang (warnings as errors) and checked with the ESP32's GCC. Highlights: a synthetic pass 20 dB above the noise, following the free-space curve, is detected, correlates at r 0.93 and peaks at 100 (STRONG, PASS); the same rise outside a pass peaks at exactly 70 (NO PASS), with no schedule at 85; six hours of noise give no false detection and never leave NO SIGNAL; a lasting +10 dB step unfreezes at 15 minutes and clears after 27.
+- The pass schedule: `tools/make-passes.mjs` agrees with the website's own pass finder to the second (3 unit tests), and the C++ parser in `rqs.h` reads the file it writes (part of the firmware tests). From the committed orbit data: 9 to 11 passes in 48 hours, about 1.6 KB, the longest 12.8 minutes.
+- Firmware 1.2 compiles for the ESP32 with all warnings on and none from the sketch or `rqs.h` (the only warnings are inside the Adafruit INA219 library, as before): 1,110,588 bytes of flash (84%), 60,920 bytes of RAM (18%). Both calibration sketches compile the same way: 287,236 and 324,936 bytes.
+- The website: 29 unit tests and 28 browser tests (desktop and 360 px phone): every hero state (WARMING UP, the four labels, the four tags, TEMP N/A, BATT N/A, null, offline, a record from older firmware), the Why panel, the sparkline, the RF overlays and shading, the score chart, the detection log, no console errors, no sideways scroll.
+- The calibration sketches' copied code matches the station sketch (5 unit tests).
+- The references in 14.18: Rohling 1983, Friis 1946 and Rousseeuw and Croux 1993 on Crossref; the AD8307 datasheet Rev. D read (Rev. F not downloadable).
+- Secret scan passes; no em dashes; `secrets.h` (now holding Cole's home WiFi) stays git-ignored.
 
-**Changed from the approved design while building** (each marked S1 or S3 above): the plus-or-minus no longer shrinks for repeated slices of the same kind (a flaw found by the tests); a pack-change rule for 3 outliers in a row; the full anchor needs 20 minutes at full voltage; the simulated curves are made while the tests run instead of stored; the accuracy table in 14.8 now comes from the simulation; the health log is read with one listener instead of repeated fetches; `sohState` saves the cycle count every 30 minutes instead of 5.
+**Changed while building** (marked "(built)" above): the pass part counts only while something is detected (14.10); the RQS JSON size is measured, not estimated (14.13); the history query covers at least 30 minutes for the sparkline; `site/data/passes.json` is made on every deploy and never committed, and no schedule is made from orbit data older than 7 days.
 
-**Accuracy limits:** 14.16.
+**Only Cole can verify (needs the station, O15 to O20):**
+
+- Anything in 1.2 running on the ESP32: NTP, the schedule fetch over HTTPS, the new LCD pages, `t`, `q`, `w`, the RQS fields reaching Firebase.
+- Whether the RF chain responds at all (SAWbird supply, NanoVNA test, `docs/rqs-validation.md` test a).
+- ALPHA_T (warm-up test b) and a real pass (test c). Until then every weight and threshold is a guess.
+- The two calibration sketches on the real touch pad and thermistor.
+- The live Firebase path: there is still no Firebase project (O1).
+
+## 15. Firmware 1.2: LCD pages and calibration sketches (Cole, 2026-11-01)
+
+Built 2026-11-01. Compiled, not run on the station.
+
+### 15.1 LCD pages
+
+At power on (after the short start-up messages), the LCD shows page 0. Each confirmed touch goes to the next page; after the last it returns to page 0. These five pages are the whole LCD; the old pages for raw RF, capacitive debug, battery voltage and power, and WiFi status go away. That information is still in the Serial print and on the website.
+
+| Page | Line 1 | Line 2 |
+|---|---|---|
+| 0, RF and RQS | `RF -75.1 +12.3dB` (filtered dBm and excess; `RF -75.1 dBm` while warming up) | `RQS 57 GOOD`, then every 2 s `RQS 57 NO PASS` (the label and tag take turns; `NO SCHED` short for NO SCHEDULE) |
+| 1, temperatures | `BMP388  23.4 C` | `Therm   24.1 C` (`--` when unavailable) |
+| 2, pressure | `P 1013.2 hPa` | `Alt 312 m` |
+| 3, fan | `Fan 1080 RPM` | `ok`, `STALLED` or `off` |
+| 4, battery | `I 105.3 mA` | `87% left 21h34m` (`LOW` under 20% or under 9.5 V) |
+
+### 15.2 Calibration sketches
+
+Two separate sketches, so the station sketch stays as it is: `firmware/cal_capacitive/cal_capacitive.ino` and `firmware/cal_thermistor/cal_thermistor.ino`. The commands and steps are at the top of each sketch. Each needs only the Serial Monitor (no PC software), walks through its steps, and prints `#define` lines to paste into `station_firmware.ino`. They copy the circuit constants and measurement code from the station sketch (an Arduino sketch cannot include a file from another folder). A unit test (`tests/unit/calibration.test.mjs`) checks that the copied constants, the measurement functions and the thermistor formula lines match the station sketch, so they cannot drift apart.
+
+**Capacitive sensor** (same pins and timing as the station):
+
+1. Idle: 30 s hands off. Records the delay's mean and noise.
+2. Touch: three 10 s holds when prompted. Records the delay change during each.
+3. It sets the press and release levels between the idle noise and the weakest touch, with a margin each side. It warns if the gap is too small to be reliable.
+   - Prints `CAP_PRESS_DELTA_US` and `CAP_RELEASE_DELTA_US`.
+4. Optional: measure the GPIO high level and CAP_REF with a meter and type them in.
+   - Prints `CAP_VS` and `CAP_VREF`.
+5. Optional: disconnect the pad wire and clip known capacitors (for example 0, 10, 22, 47, 100 pF) where it connected, typing each value. A straight-line fit of delay against capacitance gives the real slope and offset.
+   - Prints `CAP_PF_SLOPE_CAL`, `CAP_PF_OFFSET_CAL` and `CAP_TD_OFFSET_US` (0), with the fit's worst error. (built) `capPF` then reads the capacitance connected at the pad terminal, not counting the wiring's own.
+
+**Thermistor** (same mux path as the station; the BMP388 or a reference thermometer as the reference):
+
+1. Live view every second: ADC voltage, the thermistor resistance worked out from the circuit, the temperature without the offset, and a "steady" mark once the last 30 readings stop moving.
+2. Capture a point with `p <reference C>` (for example in ice water, at room temperature, in warm water), or `p` alone to use the BMP388 when both sit in the same air. At least 2 points, 10 C or more apart; 3 is better.
+3. `f` fits the beta model ln R = ln R0 + B x (1/T - 1/T0) by least squares. It prints `THERM_R0`, `THERM_BETA` and `THERM_OFFSET_C` (normally near 0 after the fit), with the error left at each point.
+4. If the resistance comes out impossible (negative or far off the part's range), the circuit constants are wrong rather than the thermistor. It says so and lists which values to measure with a meter (`BRIDGE_VEXC`, `V_MID`, `V_BIAS`), instead of hiding it behind an offset. This is probably where the old +96.2 C offset came from.
+
