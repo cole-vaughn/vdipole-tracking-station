@@ -1,6 +1,6 @@
 # Satellite V-Dipole Tracking Station: Dashboard v2 Spec
 
-Status: interview done, analysis reviewed, build in progress (see section 13).
+Status: v1 site built (section 13). Battery state of health (section 14) is designed and waiting for Cole's approval.
 Last updated: 2026-10-31. This file replaces the draft PDF as the source of truth.
 
 Rules that apply to everything below:
@@ -51,6 +51,7 @@ Success criteria (from the draft, unchanged):
 | D18 | Google Photorealistic 3D Tiles are out of v1. | Needs a restricted, budget-capped key. | Q17 |
 | D19 | The satellite is an illustrative 3D model (gold bus, two solar wings, Earth-facing antenna), drawn about 500 km across and labeled as not to scale. | Cole asked for a model instead of a dot; no exact public model exists. | Review |
 | D20 | No LIVE/DELAYED/OFFLINE pill. Freshness shows as data age, the offline banner and dimmed cards. The header is not sticky on phones. | Cole's request. | Review |
+| D21 | Battery state of health (SOH) is the course "go beyond" algorithm: usable energy over the 26.6 Wh label, learned from normal use (no learning runs). Each discharge is one slice of evidence; a weighted total least squares fit (Plett 2011) gives one score with a plus-or-minus, shown from the first usable slice. Separate `health` and `healthLog` nodes. No internal resistance shown. Colors 80 / 60, with 60 marked as a project choice. Full design in section 14. | Course requirement; Cole wants no special learning procedure and no new hardware. | SOH brief and Cole's answers 2026-10-31 |
 
 ## 3. The station and its data
 
@@ -80,7 +81,7 @@ So the site must handle null, missing and unverified data from day one.
 SPEC.md  README.md  .gitignore
 site/            the published website (index.html, js/, css/, data/gp.json)
 tests/           unit tests, Playwright tests, tests/fixtures (never published)
-firmware/        sketch, secrets.example.h, README_firmware.md
+firmware/        README.md, station_firmware/ (sketch, soh.h, secrets.example.h)
 .github/workflows/   tests, secret scan, orbit data job, Pages deploy
 (.claude/skills/ holds local helper skills; git-ignored, not published)
 ```
@@ -104,12 +105,13 @@ GitHub Action (every few hours) --> CelesTrak GP data --> site/data/gp.json --> 
 
 Budget (re-check on the vendor pages before relying on it): Spark allows 100 connections, 1 GB stored, 10 GB per month downloaded.
 
-| Item | Draft number | Note |
+| Item | Number | Note |
 |---|---|---|
-| Record size | 420 bytes | My count of the firmware's JSON is likely higher. Measure it. See analysis A3. |
-| History growth | about 3.6 MB/day | At 520 bytes it is about 4.5 MB/day. Both mean roughly 220 to 275 days to fill 1 GB. |
+| Record size | 417 bytes of JSON, about 441 stored with its push key | Measured 2026-10-31 by building the firmware's JSON with realistic values (13-digit `ts`, every field at its sent precision). Re-check on the first real record. |
+| History growth | about 3.8 MB/day | 1 GB lasts about 262 days. |
 | One always-open tab | about 18 MB/day | About 0.54 GB/month. 50% of the download limit is about 9 such tabs. |
-| 24 h history load | about 3.6 MB | Fine now and then, not on every page view. |
+| 24 h history load | about 3.8 MB | Fine now and then, not on every page view. |
+| Battery health (section 14.13) | under 0.4 MB/day per tab, about 0.01 MB/day stored | With the recommended separate health nodes. Adding the fields to every record instead costs much more (14.13). |
 
 Database rules (any change needs Cole's OK; Firebase is not set up yet, so these can be right from the start). Proposed, stricter than the firmware README (see analysis A1):
 
@@ -124,17 +126,22 @@ Database rules (any change needs Cole's OK; Firebase is not set up yet, so these
         ".read": "query.orderByChild == 'ts' && query.limitToLast <= 9000",
         ".indexOn": ["ts"]
       },
+      "health":    { ".read": true },
+      "healthLog": {
+        ".read": "query.orderByChild == 'ts' && query.limitToLast <= 500",
+        ".indexOn": ["ts"]
+      },
       ".write": "auth != null && auth.token.email == '<esp32 user email>'"
     }
   }
 }
 ```
 
-Replace the placeholder email only in the Firebase console. Turn off new sign-ups if the console allows it.
+Replace the placeholder email only in the Firebase console. Turn off new sign-ups if the console allows it. The `health` and `healthLog` entries are for battery health (section 14), approved by Cole on 2026-10-31 (O9).
 
 ## 6. Fields
 
-All 25 keys under `/station/latest` (and each history record): ts, tempC, pressHPa, altM, thermRaw, thermFilt, rfRawDbm, rfFiltDbm, capTdUs, capDeltaUs, capPF, touched, touchCount, capFault, battV, battmA, battmW, battSocPct, battWhLeft, battHoursLeft, battPeakmA, fanRpm, fanStalled, rssi, uptimeS. Also `/station/touch` {state, count, ts} and `/station/meta` {fw, bootTs}.
+All 25 keys under `/station/latest` (and each history record): ts, tempC, pressHPa, altM, thermRaw, thermFilt, rfRawDbm, rfFiltDbm, capTdUs, capDeltaUs, capPF, touched, touchCount, capFault, battV, battmA, battmW, battSocPct, battWhLeft, battHoursLeft, battPeakmA, fanRpm, fanStalled, rssi, uptimeS. Also `/station/touch` {state, count, ts} and `/station/meta` {fw, bootTs}. Battery health adds `/station/health` and `/station/healthLog` (section 14.12).
 
 | Where | Fields |
 |---|---|
@@ -222,6 +229,12 @@ Definition of done: all milestones complete, all tests pass and shown to Cole, n
 | O6 | Bench check: thermistor vs BMP388, BMP388 health, fan tach (meter check first). | Cole |
 | O7 | Firmware changes the agent wants to ask for (none made yet): rename user-visible old-name strings (splash text, version string, flash namespace), charge-aware battery estimate, slimmer history records, TLS pinning. | Cole decides |
 | O8 | Take down v1 after v2 is live. Consider exporting ThingSpeak data first. | Cole |
+| O9 | Decided: separate `/station/health` and `/station/healthLog` nodes, with their two read rules (section 5). | Done |
+| O10 | Decided: no new hardware. Internal resistance is not measured and not shown. | Done |
+| O11 | Default applied: the BMP388 air temperature gates slices (15 to 35 C). Cole can switch to the thermistor once it is verified. | Cole may change |
+| O12 | Decided: 80 / 60 bands; 80 cited (USABC), 60 marked as a project choice. | Done |
+| O13 | Hardware checks for SOH: INA219 calibration, charger full voltage, a few normal charge cycles (section 14.18). | Cole |
+| O14 | Approve the SOH plan (section 14.19) before any code. | Cole |
 
 ## 12. Analysis findings
 
@@ -276,3 +289,230 @@ Built differently from the draft, on purpose:
 - The history read limit in the rules is 9,000 records (24 h at one per 10 s, plus margin).
 - Headless test browsers log a "GPU stall due to ReadPixels" driver notice from their software GPU. The page never calls
   readPixels (checked with a probe), so the console test ignores that one notice and nothing else.
+
+## 14. Battery state of health (the course "go beyond" algorithm)
+
+Status: designed 2026-10-31 with Cole's answers (O9 to O12). Nothing is built yet. Waiting for approval of the plan in 14.19.
+
+### 14.1 What it is, and how it meets the course
+
+SOH here means: the energy the pack can deliver now, divided by the label energy (26.6 Wh), times 100. A new pack can read above 100 if the label is modest. The raw number is kept and logged; the website shows at most 100.
+
+There are no learning runs and no special procedure (Cole's choice). The station learns from normal use: every stretch of discharge is one "slice" of evidence, and one fit turns all the slices into a single score with an honest plus-or-minus.
+
+| Course requirement | How this design meets it |
+|---|---|
+| Correlates to published research | The combination step is the weighted total least squares capacity estimate of Plett 2011, built for partial use (hybrid cars that never fully discharge). SOH as releasable capacity follows Ng et al. 2009. The 80% line follows the USABC manual. See 14.17. |
+| Combines measurements into a final score | Each slice pairs two measurements: energy from the INA219 and the change in charge level from the voltage. One weighted fit over all slices gives the score and its uncertainty (14.7). Temperature gates which slices count. |
+| Logged to the cloud for a sufficient time | Every slice, accepted or rejected with its reason, is appended to `/station/healthLog` with the fit after it. Never pruned. |
+
+### 14.2 What the station can and cannot measure
+
+- **The INA219 sees only what the station draws.** It sits between the power button and the buck converter, so it never sees charger current. Charging can only be inferred: the voltage rises while the load stays steady.
+- **The pack never rests while the station is on.** It always draws about 100 mA (about C/24). At that small, steady load, the voltage plus I x R is close to the open-circuit value. Points like that are "quasi-rest" anchors.
+- **Small use gives a rough answer.** One hour uses about 1.2 Wh, about 4.5% of the pack, so the voltage moves only a little, and the voltage table is generic (not measured on this pack). Expected accuracy is in 14.8. Cole's usage (on battery, recharged when low) is the best case: each discharge is a long slice.
+- **No internal resistance.** Measuring it needs a load step the firmware controls, and the station has none (the fan is always on; WiFi bursts are milliseconds and about 25 mA at the pack). Cole chose no new hardware, so resistance is not measured and not shown anywhere. The 0.25 ohm placeholder stays only inside the voltage correction.
+- **Temperature is the box air.** Nothing touches the pack, but at 100 mA it heats itself by only about 3 mW (0.1 A squared times 0.25 ohm), so it sits at the air temperature. The BMP388 is used (default; Cole did not pick a sensor). The thermistor can replace it with one setting once verified.
+- **The INA219 is uncalibrated.** `INA219_CURRENT_GAIN` (1.0) and `INA219_CURRENT_OFFSET_MA` (0.0) are placeholders. Every energy number scales with the gain. The website says "uncalibrated" until they are set.
+
+### 14.3 Inputs, cleaned up first
+
+- **INA219 averaging (firmware change).** Today one 0.5 ms snapshot is taken every 2 s. It catches WiFi bursts at random, which looks like about plus or minus 25% current noise and would fail every "steady current" check. New: the chip averages 128 samples per reading (69 ms), the firmware reads it every 100 ms and averages each 2 s window. The existing battery estimate gets the cleaner numbers too.
+- **Open-circuit estimate:** V_oc = V_batt + I x 0.25 ohm (placeholder).
+- **SOC** from V_oc with the existing table.
+- **SOE (energy percent)** from the same table: voltage integrated over charge, because the top of the curve, at higher voltage, holds more watt-hours per percent. Slices use SOE so they are scaled by energy, not charge.
+
+### 14.4 Energy counting
+
+- E (Wh) = sum of V_batt x I x dt. Also Ah = sum of I x dt, logged so results can be compared with papers that use Ah.
+- Sums use double precision. A float would lose about 0.2% over a 21-hour discharge.
+- dt is capped at 10 s. A slice with more than 1% of its time lost to gaps is rejected.
+
+### 14.5 Anchors and slices
+
+**Anchors** are moments when the voltage says something trustworthy about the charge level:
+
+| Anchor | When | SOE and its uncertainty |
+|---|---|---|
+| Full | The charger held the pack full (V_oc at or above 12.54 V, 4.18 V per cell) and was then unplugged. The last full moment is the anchor. | 100, plus or minus 1 point (the charger defines full better than the table) |
+| Quasi-rest | Every 2 s window where: current under 300 mA; current steady over 2 minutes (within 5% or 8 mA, whichever is larger); voltage not rising (at most +2 mV per minute) and not collapsing (falling slower than 30 mV per minute); at least 60 minutes after a charge ended (the voltage needs that long to settle); temperature known. | From the table. Uncertainty = voltage uncertainty / slope of the curve there. Voltage uncertainty: 15 mV per cell for the generic table (PLACEHOLDER) plus I x 0.1 ohm for the resistance guess. |
+| Cutoff | Battery voltage at or below 9.5 V for 30 s. | From the table (about 1), small uncertainty because the curve is steep there |
+
+**A stretch** is one continuous discharge: from a charge ending (or a boot) to the next charge starting (or power off). Charger plugged in is detected when V_oc rises 60 mV above the stretch's lowest value for 60 s.
+
+**One slice per stretch.** Start = the first anchor of the stretch (a full anchor if it began from a full charge). End = the anchor that gives the smallest relative error, usually the latest. Slice values: energy E between the two anchors, x = SOE_start - SOE_end, and their uncertainties.
+
+- The open slice (the stretch in progress) updates live, so the estimate improves during a discharge instead of only at the end.
+- One slice per stretch, not many small ones, because neighbouring small slices would share anchors and their errors, and the fit would count the same evidence twice.
+- A slice counts only if x is at least 2 points, E at least 0.2 Wh, mean temperature 15 to 35 C, and gaps under 1%. Otherwise it is logged as rejected with the reason.
+- Power off or reboot: the open slice is saved every 5 minutes together with its last good end anchor (energy and SOE from the same moment), so the next boot closes it there without losing accuracy. Energy after that last saved anchor is simply not part of the slice.
+
+### 14.6 How sure each slice is
+
+- sigma_x = sqrt(sigma_start^2 + sigma_end^2) from the anchors (14.5).
+- sigma_E = 2% of E plus 0.02 Wh (PLACEHOLDER: shunt tolerance and INA219 gain, until calibrated).
+- Anchors on the steep parts of the curve (near full and near empty) have small sigma; anchors on the flat middle have large sigma. The fit then trusts long slices that end low much more than short ones. (This replaces the brief's fixed "above 80% or below 15%" rule.)
+
+### 14.7 Combining all slices into one score
+
+Weighted total least squares, as in Plett 2011. Each slice says "E watt-hours moved the pack x points", and both E and x have errors. The capacity C (Wh at 100 points) that best explains all slices minimizes
+
+  J(C) = sum over slices of (E_i - C x_i / 100)^2 / (sigma_E,i^2 + (C / 100)^2 sigma_x,i^2)
+
+- Solved by a golden-section search for C between 20% and 160% of 26.6 Wh (a one-number search; at most 32 slices, so it costs nothing on the ESP32).
+- Uncertainty from the curvature of J at the best C, sigma_C^2 = 2 / J''(C). If the slices disagree more than their sigmas allow (J per degree of freedom above 1), sigma_C is scaled up by that amount. Then a floor of 3 points (PLACEHOLDER, for the generic table's shape) is added in quadrature.
+- Outliers: a slice whose normalized residual is over 3 is dropped from the fit and logged as an outlier, then the fit runs again once.
+- Memory: the last 32 accepted slices. Older ones drop out, so the score follows the pack as it ages.
+- SOH = C / 26.6 x 100, sigma_SOH = sigma_C / 26.6 x 100.
+- Confidence: **none** (no accepted slice yet), **low** (sigma above 6 points), **high** (sigma 6 points or less).
+- Display (Cole's choice): the number shows as soon as there is one accepted slice, always with its plus-or-minus. With confidence none, the pill shows learning progress instead (14.14).
+
+### 14.8 Expected accuracy
+
+From this table and the uncertainties above, for a pack at 94% SOH (one slice, then three similar slices):
+
+| Use since a full charge | About | One slice | Three slices |
+|---|---|---|---|
+| Down to 91% | 2 hours | plus or minus 24 | plus or minus 14 |
+| Down to 85% | 3 hours | 14 | 8 |
+| Down to 70% | 6 hours | 8 | 5 |
+| Down to 30% | 15 hours | 6 | 4 |
+| Down to 10% | 19 hours | 4 | 3.5 |
+
+These are the random parts only. If the real pack's curve differs from the generic table more than 15 mV per cell, the true error is larger; the disagreement test in 14.7 widens the plus-or-minus when that shows up.
+
+### 14.9 Cycles
+
+Equivalent full cycles = cumulative discharged Wh / 26.6, saved to flash. Energy drawn while the firmware thinks the charger is connected is not counted, because the charger supplies the load then. Charger detection is inferred, so this can overcount if a charge is missed.
+
+### 14.10 Persistence (Preferences namespace "station")
+
+Each blob starts with a version byte and ends with a CRC32, so an old or corrupt value resets cleanly instead of loading garbage. Keys are at most 15 characters.
+
+| Key | Holds | Written |
+|---|---|---|
+| `remWh` (exists) | energy left for the existing estimate | unchanged |
+| `sohState` | fit result (C, sigma), cycle Wh, the last slice result and whether it reached Firebase | when a slice closes; otherwise at most every 5 min, only if cycle Wh moved by 0.05 Wh or more |
+| `sohSlices` | the last 32 accepted slices (E, x, sigma_E, sigma_x, about 600 bytes) | when a slice closes |
+| `sohOpen` | the open slice: start anchor, Wh and Ah so far, temperature sum, gap seconds, lowest V_oc, best end anchor | at most every 5 min during a stretch; removed when it closes |
+
+Flash wear: at most about 300 small writes a day, the same rate the firmware already uses for `remWh`.
+
+### 14.11 Serial commands
+
+| Key | Action |
+|---|---|
+| `h` | Print SOH debug: fit result, every stored slice, the open slice, and which anchor checks fail right now. |
+| `z` | Reset all SOH state. Asks for `y` within 10 s; anything else cancels. |
+
+### 14.12 Data contract (O9: separate nodes, approved)
+
+`/station/latest` and `/station/history` do not change.
+
+`/station/health`, overwritten at most once a minute when something changed, and right after a slice closes (about 230 bytes):
+
+| Key | Type | Meaning |
+|---|---|---|
+| `ts` | ms epoch | Server time of this write |
+| `battSohPct` | number or null | SOH from the fit, raw (can be above 100). Null while confidence is none. |
+| `battSohSigmaPct` | number or null | Its plus-or-minus, in points |
+| `battSohConf` | "none", "low", "high" | Confidence (14.7) |
+| `battCapWhEst` | Wh or null | Fitted usable energy |
+| `battCycles` | number | Equivalent full cycles |
+| `battSohSlices` | count | Slices in the fit |
+| `battSohProgressPct` | 0 to 100 | Progress of the open slice toward being usable; 100 once usable |
+| `battSohLearn` | "waiting", "discharging", "charging" | What the learner sees now |
+| `inaCal` | bool | False while the INA219 gain and offset are placeholders |
+
+`/station/healthLog/<pushId>`, one record per closed slice (about 190 bytes): `ts`, `ok` (bool), `why` (reason when rejected or an outlier), `start` ("full" or "rest"), `e` (Wh), `ah`, `x` (SOE points), `sx` (its sigma), `sliceSohPct` (this slice alone: E / x scaled to SOH), `fitSohPct` and `fitSigmaPct` (the fit after this slice; null after a `z` reset), `tempC` (mean), `hours`.
+
+Read rules (section 5, approved with O9): `health` public, `healthLog` only through a `ts`-ordered query of at most 500 records.
+
+### 14.13 Budget
+
+| Item | Today | With battery health |
+|---|---|---|
+| History growth | 3.8 MB/day, 1 GB in about 262 days | plus about 0.01 MB/day (a few log records) |
+| One open tab, per day | 18 MB | plus at most 0.33 MB (usually about 0.04) |
+| 24 h history load | 3.8 MB | same; the health log fetch is under 100 KB |
+
+Measured: a health node is 227 bytes, a health log record about 190 bytes with its key. For comparison, the six fields in every record (the brief's layout) would have added 121 bytes per record: 4.9 MB/day of history and 23 MB/day per open tab.
+
+### 14.14 Website
+
+**Pill** next to the battery percent, a button that opens the detail panel:
+
+| State | Pill shows |
+|---|---|
+| Confidence high or low | "SOH 94% ±6" with a small "est." |
+| Confidence none | "SOH learning 42%" (progress of the first slice) |
+| No health data (node missing or null) | "SOH --" |
+| Station offline | grey, like the other cards |
+
+Colors (O12, approved), never by color alone (the band name is in the panel and in the screen-reader label):
+
+- 80% and above: good. Cited: the USABC manual puts end of life at 80% of rated capacity.
+- 60% to 80%: fair. Still works, with less runtime.
+- Under 60%: replace. Not cited: no free, checkable source was found (IEC 61960-3 reportedly uses 60% in its endurance test, but it is paywalled and secondary sources disagree). This line is a project choice, and the spec and report say so.
+
+**Panel** (tap or click the pill; hover also opens it on a desktop; Escape or a click outside closes it): estimated usable energy with its plus-or-minus against 26.6 Wh rated, equivalent cycles, confidence in words, slices used, what the learner sees now, last update (from the newest log record), the last slice's result and reason, "uncalibrated" while `inaCal` is false, and one line: "Estimate from voltage and current, not a lab capacity test." No resistance (Cole's choice).
+
+**Battery health chart:** a new "Battery health" tab in the graphs section, always all-time (the 15 min to 24 h buttons do not apply there and say so). The fitted SOH as a stepped line with its plus-or-minus as a shaded band; each slice's own value as a point (filled circle for slices from a full charge, hollow triangle for slices from a rest point, with a legend); a dashed 80% line labeled "end-of-life line (USABC)". The line breaks after a `z` reset. Rejected slices are listed under the chart with their reasons.
+
+**Data:** a listener on `/station/health` (tiny, changes rarely), and the health log fetched once (`orderByChild("ts")`, `limitToLast(500)`) and again when a slice closes. Config: `soh: { ratedWh: 26.6, goodAtOrAbovePct: 80, replaceBelowPct: 60 }`.
+
+### 14.15 Tests
+
+- **Firmware logic on the PC:** `soh.h` is plain C++ with no Arduino headers. `tests/firmware/soh_test.cpp` compiles it with the system compiler (`npm run test:firmware`, also in CI). Synthetic discharge curves in `tests/fixtures/soh/`, generated by a script from a simulated pack with a known true capacity and labeled SYNTHETIC in every file. Cases:
+  - a full discharge recovers the true SOH within its plus-or-minus;
+  - short slices give a wide plus-or-minus that shrinks as slices are added;
+  - rejections: too cold, too hot, no temperature, too small, unstable current (no anchors), gaps;
+  - charger plugged in mid-stretch closes the slice at the last good anchor;
+  - reboot mid-stretch closes the slice at the saved anchor;
+  - an outlier slice is dropped; the fit follows when the true capacity drops (aging);
+  - persistence round trip, and a corrupt blob resets.
+- **Firmware build:** `arduino-cli compile` stays clean (no new warnings).
+- **Website unit tests:** band and pill text for every state.
+- **Playwright:** pill in each state (none, low, high, null, offline); panel opens and closes (click, Escape); health chart renders with a gap; no console errors. Fixtures labeled as before.
+
+### 14.16 Known accuracy limits
+
+- The generic voltage table can be off by tens of millivolts per cell for this pack. That is the biggest error source, especially for short slices.
+- Slices that end in the flat middle of the curve (about 40 to 60%) are weak; the uncertainty reflects it.
+- Until the INA219 is calibrated, every energy number carries the shunt tolerance (about 1%) and the INA219 gain error.
+- SOH here is energy based (what the station cares about). Papers usually report capacity (Ah); the log keeps both. Energy SOH falls a little faster than capacity SOH because rising resistance also lowers the voltage.
+- Temperature is the box air, not the cells.
+- Charging is inferred. A missed charge would usually show up as a voltage rise and close the slice, but it can overcount cycles.
+- A 3S pack is limited by its weakest cell; the estimate is for the pack as a whole, which is what matters to the station.
+- Discharging below about 9.5 V is never needed, and the firmware never asks for it.
+
+### 14.17 References (each checked on 2026-10-31)
+
+1. G. L. Plett, "Recursive approximate weighted total least squares estimation of battery cell total capacity," *Journal of Power Sources*, vol. 196, no. 4, pp. 2319-2331, 2011. doi:10.1016/j.jpowsour.2010.09.048.
+   Used for the core method: capacity from accumulated charge versus change in SOC over partial segments, where both carry errors, weighted by uncertainty, so no full discharge is needed. Checked: Crossref record; the method as described in the matching patent (US 8,041,522) and in MathWorks' implementation. This project solves the weighted total least squares cost directly by a one-number search over a small stored set of slices, instead of Plett's recursive approximation.
+2. K. S. Ng, C.-S. Moo, Y.-P. Chen, Y.-C. Hsieh, "Enhanced coulomb counting method for estimating state-of-charge and state-of-health of lithium-ion batteries," *Applied Energy*, vol. 86, no. 9, pp. 1506-1511, 2009. doi:10.1016/j.apenergy.2008.11.021.
+   Used for the SOH definition: health from the capacity the pack actually releases, measured by counting what it delivers. Checked: Crossref record, and the abstract on RePEc ("the state-of-health (SOH) is evaluated by the maximum releasable capacity").
+3. United States Advanced Battery Consortium, *Electric Vehicle Battery Test Procedures Manual*, Revision 2, January 1996. Glossary, Appendix F: end of life is when the net delivered capacity is less than 80% of rated capacity, or peak power is less than 80% of rated.
+   Used for the 80% line. Checked: read in the PDF published on uscar.org. Caveat: an electric-vehicle convention; one recent paper says later revisions dropped the fixed percentage (not confirmed).
+
+Not cited: IEC 61960-3 (paywalled, could not be checked).
+
+### 14.18 Tests only Cole can run (on the real station)
+
+1. INA219 two-point calibration against a meter in series (sets the gain and offset; every SOH number depends on it).
+2. Measure the charger's full voltage at the jack. Full anchors assume about 12.6 V; below 12.54 V they never trigger.
+3. Normal use for a few charge cycles: check that `healthLog` gets one record per discharge and the plus-or-minus shrinks.
+4. Plug the charger in partway through a discharge: the slice should close at its last good anchor.
+5. Power-cycle with the button during a discharge: the slice should close at its saved anchor and a new one start.
+6. Confirm the BMP388 reads sensible air temperature.
+
+### 14.19 Plan (after approval)
+
+One local commit per step, after Cole approves this section.
+
+| Step | Work | Acceptance |
+|---|---|---|
+| S1 | `soh.h` pure logic, synthetic curve generator, C++ tests | All firmware tests pass on the PC |
+| S2 | Firmware: INA219 averaging, SOH wiring, persistence, `h` and `z`, health uploads, version 1.1 | Compiles with no new warnings; secret scan passes |
+| S3 | Website: data source, pill and panel, health chart tab, fixtures | Unit and Playwright tests pass at both sizes, no console errors |
+| S4 | Docs: README, firmware README, this section marked built; final report | Report lists what was verified, what was not, and the accuracy limits |
