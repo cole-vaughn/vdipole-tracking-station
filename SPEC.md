@@ -236,7 +236,7 @@ Definition of done: all milestones complete, all tests pass and shown to Cole, n
 | O9 to O14 | Battery health items. Cancelled with battery health on 2026-11-01 (D21). | Closed |
 | O15 | RF: power the SAWbird from a stripped USB-C cable, then confirm the RF chain with a NanoVNA. The last hardware task. | Cole |
 | O16 | Decided 2026-11-01: the BMP388 sits elsewhere in the box, away from the AD8307 and the ESP32. It reads box air (14.4). | Done |
-| O17 | Run the RQS validation procedures in `docs/rqs-validation.md` (NanoVNA CW test, warm-up test for ALPHA_T, a real pass log). Results go in `docs/validation/` only after they are run. | Cole |
+| O17 | Run the RQS validation procedures in `docs/rqs-validation.md`. (c) real pass done 2026-11-01: no detection, any signal below about 0.13 dB, floor about 18 dB above thermal (`docs/validation/2026-11-01-real-pass.md`). Still to do: (a) NanoVNA CW test (the demo, `docs/demo-script.md`), (b) warm-up test, and the 50 ohm load test of the floor. | Cole |
 | O18 | After Pages is enabled: put the pass schedule address (`https://<user>.github.io/vdipole-tracking-station/data/passes.json`) in `secrets.h` as `PASSES_URL`. Until then the station tags every score NO SCHEDULE. | Cole |
 | O19 | Decided 2026-11-01 (Cole left it to the agent): `/station/meta` carries `rqsAlphaT`, and all 12 RQS fields stay in history. | Done |
 | O20 | Run the two calibration sketches (15.2) and paste their `#define` lines into the station sketch. | Cole |
