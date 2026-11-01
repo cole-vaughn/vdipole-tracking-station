@@ -55,7 +55,7 @@ Success criteria (from the draft, unchanged):
 
 ## 3. The station and its data
 
-Hardware status on 2026-10-30 (from the draft, to be confirmed): enclosure printed and partly assembled. Still open: coax through the lid, foil pad, SMA connector genders, Breadboard 1 wiring, button and jack wiring, SAWbird 5 V supply (measured 0 V), lid screws. Fan tach and final touch calibration are not done. The firmware has never been compiled or run.
+Hardware status on 2026-10-31 (from Cole): almost done. The fan tach is wired and working. What is left is RF: power the SAWbird LNA from a stripped USB-C cable, then check the RF chain with a NanoVNA (O15). The station firmware compiles; the full first-run checklist in the firmware README has not been done yet.
 
 So the site must handle null, missing and unverified data from day one.
 
@@ -63,11 +63,11 @@ So the site must handle null, missing and unverified data from day one.
 |---|---|
 | BMP388 | Air temperature and pressure. Altitude uses a fixed 1013.25 hPa sea level, so it drifts with weather and is not true altitude. The board was physically damaged, so treat it as unconfirmed until Cole checks it. |
 | Thermistor | Carries a +96.2 C legacy offset in the conversion. Show an "unverified" tag on every thermistor value and chart until Cole confirms it agrees with the BMP388. One config flag removes the tag. |
-| RF chain | One broadband power number in dBm (about -75 dBm with no signal). Not a spectrum. Cannot tell a satellite from interference. May be flat until the SAWbird supply is fixed. |
+| RF chain | One broadband power number in dBm (about -75 dBm with no signal). Not a spectrum. Cannot tell a satellite from interference. Flat until the SAWbird has power (planned: a stripped USB-C cable) and the chain is checked with a NanoVNA (O15). |
 | Touch pad | touched, count since boot, delay, delta, fault flag. Thresholds need re-tuning after final assembly. |
 | INA219 | Voltage, current and power on the 12 V line, between the button and the buck converter. It measures what the system draws. |
 | Battery estimate | An estimate. Derating 0.90 and internal resistance 0.25 ohm are placeholders. Always shown with "~". |
-| Fan | RPM from the tach on GPIO18 (10k series resistor, 10k pull-up to 3.3 V on the fan side; see the firmware README), 2 pulses per turn. Tach safety check passed 2026-10-31 (open collector). Being wired, so RPM is null until then. RPM also falls as battery voltage falls. |
+| Fan | RPM from the tach on GPIO18 (10k series resistor, 10k pull-up to 3.3 V on the fan side; see the firmware README), 2 pulses per turn. Wired and working (2026-10-31): about 1,050 to 1,110 RPM on the 12 V battery, about 650 RPM on USB power from a laptop (used only while flashing). RPM falls as the supply voltage falls. |
 | ESP32 | WiFi RSSI and uptime. |
 
 ## 4. Repo, naming and hosting
@@ -226,7 +226,7 @@ Definition of done: all milestones complete, all tests pass and shown to Cole, n
 | O3 | Decided: Firebase JS SDK from a pinned CDN (server clock offset via `.info/serverTimeOffset`, built-in reconnect). | Done |
 | O4 | Logged charge test for the charging inference (section 7, F2). | Cole |
 | O5 | Compile and flash the firmware, run the README checklist. | Cole |
-| O6 | Bench check: thermistor vs BMP388, BMP388 health, fan RPM once wired to GPIO18 (the tach safety check passed 2026-10-31). | Cole |
+| O6 | Bench check: thermistor vs BMP388, BMP388 health. (Fan tach done 2026-10-31: wired to GPIO18 and reading correctly.) | Cole |
 | O7 | Firmware changes the agent wants to ask for (none made yet): rename user-visible old-name strings (splash text, version string, flash namespace), charge-aware battery estimate, slimmer history records, TLS pinning. | Cole decides |
 | O8 | Take down v1 after v2 is live. Consider exporting ThingSpeak data first. | Cole |
 | O9 | Decided: separate `/station/health` and `/station/healthLog` nodes, with their two read rules (section 5). | Done |
@@ -234,7 +234,8 @@ Definition of done: all milestones complete, all tests pass and shown to Cole, n
 | O11 | Default applied: the BMP388 air temperature gates slices (15 to 35 C). Cole can switch to the thermistor once it is verified. | Cole may change |
 | O12 | Decided: 80 / 60 bands; 80 cited (USABC), 60 marked as a project choice. | Done |
 | O13 | Hardware checks for SOH: INA219 calibration, charger full voltage, a few normal charge cycles (section 14.18). | Cole |
-| O14 | Approve the SOH plan (section 14.19) before any code. | Cole |
+| O14 | Decided 2026-10-31: SOH plan approved. | Done |
+| O15 | RF: power the SAWbird from a stripped USB-C cable, then confirm the RF chain with a NanoVNA. The last hardware task. | Cole |
 
 ## 12. Analysis findings
 

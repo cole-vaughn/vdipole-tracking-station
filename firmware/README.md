@@ -274,7 +274,8 @@ The old CP4 report numbers were mock values. Do not present any of them as acqui
   count stays right; resolution of the RPM reading is about 15 RPM over the 2 s window.
 - **Sparse RF signal.** The RF reading is one broadband power number behind a 137 MHz SAW filter, not a spectrum. It sits near
   -75 dBm without a signal. Anything that visualizes "signal" should use dB above a rolling baseline.
-- **SAWbird 5 V cable** measured 0 V and is unresolved at the time of writing. That is a hardware task, not a firmware one.
+- **SAWbird 5 V supply** is the last open hardware task: Cole plans to power it from a stripped USB-C cable, then check
+  the RF chain with a NanoVNA. Until then the RF reading stays flat.
 - **Not run on hardware.** It compiles (see the top of this file), but nothing has been checked on the board yet.
 
 ## First-run test checklist
@@ -287,7 +288,8 @@ The old CP4 report numbers were mock values. Do not present any of them as acqui
 4. Rules test: try a write with no token (for example `curl -X PUT -d '{}' https://<host>/station/test.json`). It must be refused.
 5. Power from the battery. Confirm INA219 voltage and current against the multimeter; run `f` right after a full charge.
 6. Run `m` and the capacitive `b`, `s`, `c` commands; confirm press, release, and the counter.
-7. Do the tach check above, then set `FAN_ENABLED 1` and confirm a sane RPM that tracks fan speed.
+7. Do the tach check above, then set `FAN_ENABLED 1` and confirm a sane RPM that tracks fan speed. Done 2026-10-31:
+   about 1,050 to 1,110 RPM on the 12 V battery, about 650 RPM on laptop USB power (USB is only used while flashing).
 8. Pull the WiFi for a minute and plug it back in: uploads must resume without a reboot.
 9. Leave it running for an hour: sign-in refreshes around the 50 minute mark without a gap in `/station/latest`.
 10. (1.1, planned) Battery health, after the INA219 calibration: use the station normally for a few charge cycles and

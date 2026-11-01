@@ -49,7 +49,7 @@ function makeRecord(ts) {
     battWhLeft: 15.37,
     battHoursLeft: 3.21,
     battPeakmA: 655,
-    fanRpm: 1840 + noise(25),
+    fanRpm: 1080 + noise(25),
     fanStalled: false,
     rssi: -61 + Math.round(noise(2)),
     uptimeS: 3 * 3600 + 720,

@@ -61,7 +61,9 @@ export const CONFIG = {
     maxGapS: 30,           // a data gap longer than this resets the detector
   },
 
-  fan: { stallRpm: 200, maxVisualRps: 3, rpmAtMaxVisual: 3000 },
+  // Measured 2026-10-31: about 1,050 to 1,110 RPM on the 12 V battery, about 650 on USB power (only while flashing).
+  // Full speed on the battery spins the drawing at about the visual cap; USB power visibly slower.
+  fan: { stallRpm: 200, maxVisualRps: 3, rpmAtMaxVisual: 1200 },
 
   graphs: {
     ranges: [

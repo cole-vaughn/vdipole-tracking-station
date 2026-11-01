@@ -90,6 +90,7 @@ struct Telemetry {
 #define FAN_PULSES_PER_REV   2        // standard 3-pin and 4-pin PC fans give 2 tach pulses per turn
 #define TACH_DEBOUNCE_US     2000     // ignore edges closer than this (a 3000 RPM fan has 10000 us between pulses)
 #define FAN_STALL_RPM        200      // below this, with the system running, report a stall
+                                      // (measured: about 1050 to 1110 RPM on the 12 V battery, about 650 on USB power)
 #define FAN_STALL_GRACE_MS   10000    // do not report a stall during the first seconds after boot
 #define FAN_ENABLED          1        // set to 0 until the tach wire is connected, so no false "stalled" is reported
 
