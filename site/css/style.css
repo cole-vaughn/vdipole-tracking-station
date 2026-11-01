@@ -230,6 +230,54 @@ body[data-station="nodata"] .grid .panel:not(.globe-panel) { opacity: 0.6; filte
 .batt-text .big { min-width: 5ch; }
 .batt-left { color: var(--muted); font-family: var(--font-num); font-variant-numeric: tabular-nums; }
 
+/* Battery health pill and panel. The band is also in words (panel and screen-reader label), never color alone. */
+.battery-panel { position: relative; }
+.soh-pill {
+  --band: var(--muted);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-height: 40px;
+  margin-top: 8px;
+  padding: 0 14px;
+  border: 1px solid color-mix(in srgb, var(--band) 60%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--band) 10%, transparent);
+  color: var(--band);
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.95rem;
+  line-height: 38px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.soh-pill:hover { background: color-mix(in srgb, var(--band) 18%, transparent); }
+.soh-pill[data-band="good"] { --band: var(--good); }
+.soh-pill[data-band="fair"] { --band: var(--amber); }
+.soh-pill[data-band="replace"] { --band: var(--bad); }
+.soh-pill[data-conf="low"] { border-style: dashed; }
+.soh-pill .est { font-family: var(--font-ui); font-size: 0.75rem; color: var(--muted); letter-spacing: 0.04em; }
+.soh-panel {
+  position: absolute;
+  z-index: 15;
+  left: 12px;
+  right: 12px;
+  max-width: 400px;
+  margin-top: 8px;
+  padding: 12px 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+}
+.soh-panel h3 { margin: 0 0 8px; font-size: 0.82rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.soh-panel h3 .sub { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.soh-panel dl { display: grid; grid-template-columns: auto 1fr; gap: 5px 14px; }
+.soh-panel dl div { display: contents; }
+.soh-panel dt { color: var(--muted); font-size: 0.8rem; padding-top: 1px; }
+.soh-panel dd { font-size: 0.86rem; overflow-wrap: anywhere; }
+.soh-uncal { margin-top: 10px; color: var(--amber); font-size: 0.85rem; }
+
 /* ---------- S-meter ---------- */
 .smeter { display: block; width: 100%; max-width: 300px; margin: 0 auto; }
 .smeter-arc { fill: none; stroke: var(--line); stroke-width: 8; stroke-linecap: round; }
@@ -304,6 +352,14 @@ body[data-station="nodata"] .grid .panel:not(.globe-panel) { opacity: 0.6; filte
 .chart-card figcaption { display: flex; justify-content: space-between; gap: 8px; font-size: 0.9rem; margin-bottom: 6px; }
 .chart-card figcaption .note { margin: 0; font-size: 0.8rem; text-align: right; }
 .chart-box { position: relative; height: 210px; }
+.range-note { color: var(--muted); font-size: 0.85rem; }
+.range .btn:disabled { opacity: 0.4; cursor: default; }
+.range .btn:disabled:hover { background: transparent; }
+.health-card { grid-column: 1 / -1; }
+.health-card .chart-box { height: 300px; }
+.health-sub { margin: 14px 0 4px; font-size: 0.8rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.health-list { margin: 0; padding-left: 18px; color: var(--muted); font-size: 0.86rem; }
+.health-list li + li { margin-top: 2px; }
 
 .footer { padding: 16px 16px 32px; color: var(--muted); font-size: 0.85rem; max-width: 72ch; }
 .footer p + p { margin-top: 6px; }

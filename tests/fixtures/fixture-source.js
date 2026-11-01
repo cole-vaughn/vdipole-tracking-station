@@ -70,8 +70,43 @@ function makeHistory(now) {
   return out;
 }
 
+// Made-up battery health, shaped like /station/health and /station/healthLog (SPEC 14.12). Three weeks of
+// discharges with a `z` reset in the middle, so the chart shows a break, and a few rejected slices.
+function makeHealth(now) {
+  return {
+    ts: now - 40e3, battSohPct: 93.1, battSohSigmaPct: 4.3, battSohConf: "high", battCapWhEst: 24.76,
+    battCycles: 9.6, battSohSlices: 6, battSohProgressPct: 100, battSohLearn: "discharging", inaCal: false,
+  };
+}
+
+function makeHealthLog(now) {
+  const day = 86400e3;
+  const ok = (d, start, slice, fit, sig, e, hours) =>
+    ({ ts: now - d * day, ok: true, start, e, ah: e / 11.3, x: (e / 24.8) * 100, sx: 2.1, sliceSohPct: slice,
+       fitSohPct: fit, fitSigmaPct: sig, tempC: 22, hours });
+  const no = (d, why, fit, sig, extra = {}) =>
+    ({ ts: now - d * day, ok: false, why, fitSohPct: fit, fitSigmaPct: sig, hours: 3.1, tempC: 21, ...extra });
+  return [
+    ok(20, "full", 95.1, 95.1, 9.8, 12.1, 10.2),
+    ok(18, "rest", 91.0, 93.4, 7.9, 6.3, 5.4),
+    no(17, "too cold", 93.4, 7.9, { tempC: 11, start: "full", hours: 9.8 }),
+    ok(15, "full", 94.6, 93.9, 5.2, 18.5, 15.6),
+    { ts: now - 13 * day, ok: false, why: "reset" },
+    no(12, "no end point: current not steady", null, null, { start: "rest" }),
+    ok(11, "full", 93.2, 93.2, 8.4, 11.6, 9.8),
+    ok(9, "rest", 90.4, 92.1, 6.6, 7.1, 6.0),
+    ok(7, "full", 94.0, 92.8, 5.1, 19.2, 16.3),
+    no(5, "too small", 92.8, 5.1, { start: "full", hours: 0.4 }),
+    ok(4, "full", 93.5, 93.0, 4.6, 21.9, 18.6),
+    ok(2, "rest", 91.8, 92.8, 4.5, 8.8, 7.5),
+    ok(1, "full", 94.4, 93.1, 4.3, 20.4, 17.3),
+  ];
+}
+
 export function createSource() {
-  const subs = { latest: new Set(), touch: new Set(), meta: new Set(), conn: new Set(), offset: new Set() };
+  const subs = {
+    latest: new Set(), touch: new Set(), meta: new Set(), conn: new Set(), offset: new Set(), health: new Set(), healthLog: new Set(),
+  };
   const now = Date.now();
   const state = {
     latest: makeRecord(now),
@@ -80,6 +115,8 @@ export function createSource() {
     connected: true,
     offset: 0,
     history: makeHistory(now),
+    health: params.get("health") === "none" ? null : makeHealth(now),
+    healthLog: params.get("health") === "none" ? [] : makeHealthLog(now),
   };
   const emit = (k, v) => subs[k].forEach((cb) => cb(v));
   const sub = (k, value) => (cb) => { subs[k].add(cb); queueMicrotask(() => cb(value())); return () => subs[k].delete(cb); };
@@ -105,6 +142,8 @@ export function createSource() {
     setConnected(c) { state.connected = c; emit("conn", c); },
     setHistory(records) { state.history = records; },
     clearLatest() { state.latest = null; emit("latest", null); },
+    setHealth(h) { state.health = h === null ? null : { ...state.health, ...h }; emit("health", state.health); },
+    addHealthLog(r) { state.healthLog.push(r); emit("healthLog", r); },
     autoplay,
     get state() { return state; },
   };
@@ -120,6 +159,13 @@ export function createSource() {
     onMeta: sub("meta", () => state.meta),
     onConnection: sub("conn", () => state.connected),
     onClockOffset: sub("offset", () => state.offset),
+    onHealth: sub("health", () => state.health),
+    // Like onChildAdded: every existing record once, then each new one.
+    onHealthLog(cb) {
+      subs.healthLog.add(cb);
+      queueMicrotask(() => state.healthLog.forEach((r) => cb(r)));
+      return () => subs.healthLog.delete(cb);
+    },
     async fetchHistory(sinceMs, limit) {
       return state.history.filter((r) => r.ts >= sinceMs).slice(-limit);
     },

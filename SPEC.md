@@ -1,6 +1,6 @@
 # Satellite V-Dipole Tracking Station: Dashboard v2 Spec
 
-Status: v1 site built (section 13). Battery state of health (section 14) approved; S1 (logic and PC tests) and S2 (firmware 1.1) built, S3 and S4 in progress.
+Status: v1 site built (section 13). Battery state of health (section 14) approved; S1 (logic and PC tests), S2 (firmware 1.1) and S3 (website) built, S4 (docs and report) in progress.
 Last updated: 2026-11-01. This file replaces the draft PDF as the source of truth.
 
 Rules that apply to everything below:
@@ -293,7 +293,7 @@ Built differently from the draft, on purpose:
 
 ## 14. Battery state of health (the course "go beyond" algorithm)
 
-Status: designed 2026-10-31 with Cole's answers (O9 to O12) and approved the same day. S1 built 2026-11-01: `firmware/station_firmware/soh.h` and its PC tests. S2 built the same day: firmware 1.1 uses it (compiled, not yet run on the station). S3 and S4 in progress (14.19). Details settled or changed while building S1 are marked "(S1)".
+Status: designed 2026-10-31 with Cole's answers (O9 to O12) and approved the same day. S1 built 2026-11-01: `firmware/station_firmware/soh.h` and its PC tests. S2 built the same day: firmware 1.1 uses it (compiled, not yet run on the station). S3 built the same day: the pill, panel and chart on the website, tested against labeled fixtures. S4 in progress (14.19). Details settled or changed while building S1 are marked "(S1)".
 
 ### 14.1 What it is, and how it meets the course
 
@@ -480,7 +480,9 @@ Colors (O12, approved), never by color alone (the band name is in the panel and 
 
 **Battery health chart:** a new "Battery health" tab in the graphs section, always all-time (the 15 min to 24 h buttons do not apply there and say so). The fitted SOH as a stepped line with its plus-or-minus as a shaded band; each slice's own value as a point (filled circle for slices from a full charge, hollow triangle for slices from a rest point, with a legend); a dashed 80% line labeled "end-of-life line (USABC)". The line breaks after a `z` reset. Rejected slices are listed under the chart with their reasons.
 
-**Data:** a listener on `/station/health` (tiny, changes rarely), and the health log fetched once (`orderByChild("ts")`, `limitToLast(500)`) and again when a slice closes. Config: `soh: { ratedWh: 26.6, goodAtOrAbovePct: 80, replaceBelowPct: 60 }`.
+**Data:** a listener on `/station/health` (tiny, changes rarely). (S3) The health log uses one `onChildAdded` listener on the allowed query (`orderByChild("ts")`, `limitToLast(500)`) instead of a fetch per closed slice: it downloads the newest records once (under about 115 KB), then only each new record (about 200 bytes). Config: `soh: { ratedWh: 26.6, goodAtOrAbovePct: 80, replaceBelowPct: 60, logLimit: 500 }`. If the health rules are missing, only the pill shows "--"; the rest of the page keeps working and Diagnostics shows the error.
+
+(S3) Built details: the pill shows at most 100% and never "±0"; a dashed pill border means confidence "low". The panel's rows are Health (number and band in words), Usable energy, Confidence, Slices used, Cycles, Now, Last update, Last discharge. The chart's fitted line runs on to the present and steps at each record; under it, "Discharges not used" lists the 8 newest rejected slices and resets with their reasons. Diagnostics shows the number of health log records.
 
 ### 14.15 Tests
 
@@ -536,5 +538,5 @@ One local commit per step, after Cole approves this section.
 |---|---|---|
 | S1 | `soh.h` pure logic, synthetic curve generator, C++ tests | All firmware tests pass on the PC. Done 2026-11-01: 137 checks pass with clang and GCC, and `soh.h` compiles for the ESP32 with all warnings on and none reported. |
 | S2 | Firmware: INA219 averaging, SOH wiring, persistence, `h` and `z`, health uploads, version 1.1 | Compiles with no new warnings; secret scan passes. Done 2026-11-01: 1,112,128 bytes of flash (84%), 55,424 bytes of RAM (16%), no warnings from the sketch or `soh.h`. The battery estimate now shares the voltage table and the 0.25 ohm placeholder with `soh.h`. Not run on the station. |
-| S3 | Website: data source, pill and panel, health chart tab, fixtures | Unit and Playwright tests pass at both sizes, no console errors |
+| S3 | Website: data source, pill and panel, health chart tab, fixtures | Unit and Playwright tests pass at both sizes, no console errors. Done 2026-11-01: 23 unit tests and 32 browser tests pass (4 new browser tests at both sizes); no console errors; no sideways scroll with the panel open on a 360 px phone. |
 | S4 | Docs: README, firmware README, this section marked built; final report | Report lists what was verified, what was not, and the accuracy limits |

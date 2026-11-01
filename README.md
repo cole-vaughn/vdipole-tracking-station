@@ -3,6 +3,8 @@
 A live dashboard for a student-built 137 MHz weather-satellite ground station (ELEE 4230/6230). An ESP32 reads a
 broadband RF power detector, environment sensors, a touch pad, a fan tach and the battery, and writes them to Firebase
 Realtime Database. This static site shows them live, with a 3D globe that tracks Meteor-M2-4 from public orbit data.
+The station also estimates the battery's state of health from normal use (the course "go beyond" algorithm,
+`SPEC.md` section 14), shown as a pill next to the battery percent and as an all-time chart.
 
 `SPEC.md` is the source of truth for what the site does and why.
 
@@ -23,7 +25,7 @@ GitHub Actions, every 6 h --> CelesTrak orbit data --> site/data/gp.json --> thi
 |---|---|
 | `site/` | The website. This folder, and only this folder, is published. |
 | `site/js/config.js` | Every setting: database address, station location, thresholds, RF and charging constants. |
-| `site/js/lib/` | Pure logic with unit tests (freshness, battery, charging inference, RF baseline, SGP4, graph data). |
+| `site/js/lib/` | Pure logic with unit tests (freshness, battery, battery health, charging inference, RF baseline, SGP4, graph data). |
 | `site/data/gp.json` | Orbit data. Refreshed on every deploy. |
 | `site/vendor/` | Self-hosted three.js, globe.gl and satellite.js, bundled by `npm run vendor` (do not edit by hand). |
 | `site/textures/` | Earth textures (4K for laptops, 2K for phones). |
@@ -91,6 +93,8 @@ v1 shows the first satellite in the list. The orbit code works for any of them.
   if you want a copy, then delete the `history` node. The live readings are not affected; graphs restart empty.
 - The site never downloads more than 24 hours of history, closes its live connection while the tab is hidden, and
   the database rules refuse any history read that is not a limited, time-ordered query.
+- Battery health adds a few small records a day (`/station/healthLog`, about 0.01 MB a day). **Do not delete
+  `healthLog` or `health` when you clear history:** the health score is built from that log.
 
 ## Honest limits
 
@@ -99,6 +103,9 @@ v1 shows the first satellite in the list. The orbit code works for any of them.
 - The battery percent is an estimate. "Charging" is only ever inferred, and its badge stays off until it is tuned on a
   real logged charge (`charging.showBadge` in `config.js`; the live inference is visible in Diagnostics).
 - The thermistor carries an unverified legacy calibration and is tagged "unverified" until checked against the BMP388.
+- Battery health (SOH) is an estimate from voltage and current with a plus-or-minus, not a lab capacity test. It
+  needs a few discharges before the plus-or-minus is small, and it says "uncalibrated" until the INA219 current sensor
+  is calibrated. The limits are listed in `SPEC.md` section 14.16.
 
 ## Credits
 

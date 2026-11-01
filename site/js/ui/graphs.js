@@ -1,7 +1,9 @@
 // Graphs section: history query per range, live points appended at the right edge, gaps for null.
 // Charts are only built for the visible tab, so the page stays light.
+// The "Battery health" tab is different: one all-time chart from /station/healthLog (SPEC 14.14).
 import { fmtClock, toUnit, isNum } from "../lib/format.js";
 import { downsample, insertGaps, pickSeries } from "../lib/series.js";
+import { healthSeries, notUsedText } from "../lib/health.js";
 
 const C = { accent: "#4fd1ff", amber: "#ffb454", good: "#5ee09a", raw: "#7d8fa3", line: "#1f2b3a", muted: "#7d8fa3" };
 const raw = (field, label = "Raw") => ({ field, label, color: C.raw, width: 1 });
@@ -30,7 +32,32 @@ const GROUPS = [
     { id: "cap-pf", title: "Touch capacitance", unit: "pF", digits: 1, note: "Uncalibrated", series: [{ field: "capPF", label: "Capacitance", color: C.raw }] },
     { id: "rssi", title: "WiFi signal", unit: "dBm", series: [{ field: "rssi", label: "RSSI", color: C.accent }] },
   ] },
+  { id: "health", label: "Battery health", charts: [], allTime: true },
 ];
+
+const HEALTH_CARD =
+  `<figure class="chart-card health-card" data-chart="soh"><figcaption><span>Battery state of health</span>` +
+  `<span class="note" data-note></span></figcaption>` +
+  `<div class="chart-box"><canvas aria-label="Battery state of health over time" role="img"></canvas></div>` +
+  `<p class="note">Each point is one discharge. The line is the fit over all of them, the shaded band its plus-or-minus. ` +
+  `Always all time: the range buttons do not apply here.</p>` +
+  `<h3 class="health-sub">Discharges not used</h3><ul class="health-list" id="health-not-used"></ul></figure>`;
+
+// Draws "end-of-life line (USABC)" on the dashed 80% line.
+const eolLabel = {
+  id: "eolLabel",
+  afterDatasetsDraw(chart) {
+    const y = chart.scales.y.getPixelForValue(80);
+    const { ctx, chartArea: { left, top, bottom } } = chart;
+    if (y < top || y > bottom) return;
+    ctx.save();
+    ctx.fillStyle = C.muted;
+    ctx.font = '11px "IBM Plex Mono", ui-monospace, monospace';
+    ctx.textBaseline = "bottom";
+    ctx.fillText("end-of-life line (USABC)", left + 6, y - 3);
+    ctx.restore();
+  },
+};
 
 // Hover: for each series, the reading nearest the cursor's time (binary search), so the tooltip shows every
 // series at one moment instead of hopping between lines. Nothing is shown inside a gap.
@@ -86,6 +113,8 @@ export function createGraphs({ config, now, getUnit, onError }) {
   let range = g.ranges.find((r) => r.id === g.defaultRange);
   let activeGroup = GROUPS[0].id;
   let records = [];
+  let healthRecords = [];
+  let healthTimer = null;
   let loadedSince = Infinity;
   let retryMs = 2000, retryTimer = null, redrawTimer = null, loading = false;
   const charts = new Map(); // chart id -> Chart instance
@@ -122,6 +151,7 @@ export function createGraphs({ config, now, getUnit, onError }) {
     panel.className = "chart-grid"; panel.role = "tabpanel"; panel.id = `panel-${grp.id}`;
     panel.setAttribute("aria-labelledby", tab.id);
     panel.hidden = grp.id !== activeGroup;
+    if (grp.allTime) panel.insertAdjacentHTML("beforeend", HEALTH_CARD);
     for (const c of grp.charts) {
       panel.insertAdjacentHTML("beforeend",
         `<figure class="chart-card" data-chart="${c.id}"><figcaption><span>${c.title}</span>` +
@@ -140,6 +170,10 @@ export function createGraphs({ config, now, getUnit, onError }) {
       tab.tabIndex = on ? 0 : -1;
       document.getElementById(`panel-${grp.id}`).hidden = !on;
     }
+    // The health chart is always all time, so the range buttons are switched off there and say so.
+    const allTime = GROUPS.find((x) => x.id === id).allTime === true;
+    rangeGroup.querySelectorAll("button").forEach((b) => { b.disabled = allTime; });
+    document.getElementById("range-note").hidden = !allTime;
     redraw();
   }
 
@@ -204,6 +238,7 @@ export function createGraphs({ config, now, getUnit, onError }) {
     const unit = getUnit();
     const t1 = now(), t0 = t1 - range.ms;
     const grp = GROUPS.find((x) => x.id === activeGroup);
+    if (grp.allTime) { drawHealth(Chart, unit); return; }
     for (const c of grp.charts) {
       const card = document.querySelector(`[data-chart="${c.id}"]`);
       const unitLabel = c.unit === "temp" ? `°${unit}` : c.unit;
@@ -262,11 +297,106 @@ export function createGraphs({ config, now, getUnit, onError }) {
     };
   }
 
+  // ----- Battery health (all time) -----
+  function drawHealth(Chart, unit) {
+    const card = document.querySelector('[data-chart="soh"]');
+    const t1 = now();
+    const s = healthSeries(healthRecords, t1);
+    msg.textContent = "";
+    card.querySelector("[data-note]").textContent = s.count
+      ? `All time, ${s.count} record${s.count === 1 ? "" : "s"}` : "No records yet: the first appears when a discharge ends";
+    let chart = charts.get("soh");
+    if (!chart) {
+      chart = new Chart(card.querySelector("canvas"), healthChartConfig());
+      charts.set("soh", chart);
+    }
+    const t0 = s.firstTs === null ? t1 - 7 * 86400e3 : Math.min(s.firstTs - 6 * 3600e3, t1 - 86400e3);
+    const ds = chart.data.datasets;
+    ds[0].data = s.hi; ds[1].data = s.lo; ds[2].data = s.fit; ds[3].data = s.full; ds[4].data = s.rest;
+    ds[5].data = [{ x: t0, y: 80 }, { x: t1, y: 80 }];
+    const ys = [...s.lo, ...s.full, ...s.rest].map((p) => p.y).filter(isNum);
+    chart.options.scales.x.min = t0;
+    chart.options.scales.x.max = t1;
+    chart.options.scales.y.min = Math.max(0, Math.floor(Math.min(60, ...ys) / 10) * 10);
+    chart.options.scales.y.max = 110;
+    chart.update("none");
+
+    const list = card.querySelector("#health-not-used");
+    const shown = s.notUsed.slice(0, 8).map((r) => notUsedText(r, unit));
+    if (s.notUsed.length > 8) shown.push(`and ${s.notUsed.length - 8} older`);
+    if (!shown.length) shown.push("None");
+    list.replaceChildren(...shown.map((t) => { const li = document.createElement("li"); li.textContent = t; return li; }));
+  }
+
+  function healthChartConfig() {
+    const band = { borderWidth: 0, pointRadius: 0, pointHitRadius: 0, stepped: true, spanGaps: false, label: "" };
+    const dayTick = function (v) {
+      const d = new Date(v);
+      return this.max - this.min < 2 * 86400e3 ? tick(v) : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    };
+    return {
+      type: "line",
+      data: {
+        datasets: [
+          { ...band, data: [], fill: "+1", backgroundColor: "rgba(94, 224, 154, 0.14)" },
+          { ...band, data: [], fill: false },
+          { label: "Fit, shaded ±", data: [], borderColor: C.good, backgroundColor: C.good, borderWidth: 2,
+            stepped: true, spanGaps: false, pointStyle: "line", pointRadius: 0, pointHitRadius: 8, pointHoverRadius: 3 },
+          { label: "Discharge from full", data: [], showLine: false, pointStyle: "circle", pointRadius: 4.5,
+            pointHoverRadius: 6, pointHitRadius: 10, borderColor: C.accent, backgroundColor: C.accent },
+          { label: "Discharge from rest", data: [], showLine: false, pointStyle: "triangle", pointRadius: 5.5,
+            pointHoverRadius: 7, pointHitRadius: 10, borderColor: C.amber, backgroundColor: "transparent", borderWidth: 1.6 },
+          { label: "80% end of life (USABC)", data: [], borderColor: C.muted, backgroundColor: C.muted,
+            borderDash: [6, 4], borderWidth: 1.2, pointStyle: "line", pointRadius: 0, pointHitRadius: 0 },
+        ],
+      },
+      plugins: [eolLabel],
+      options: {
+        animation: { duration: 0 }, parsing: false, normalized: true, responsive: true, maintainAspectRatio: false,
+        interaction: { mode: "nearest", intersect: true },
+        scales: {
+          x: { type: "linear", ticks: { callback: dayTick, maxTicksLimit: 7, color: C.muted }, grid: { color: C.line } },
+          y: { title: { display: true, text: "SOH %", color: C.muted }, ticks: { color: C.muted }, grid: { color: C.line } },
+        },
+        plugins: {
+          legend: {
+            labels: { color: C.muted, usePointStyle: true, boxWidth: 10, boxHeight: 10, filter: (item) => item.text !== "" },
+          },
+          tooltip: {
+            filter: (item) => item.datasetIndex >= 2 && item.datasetIndex <= 4,
+            callbacks: {
+              title: (items) => {
+                const d = new Date(items[0].parsed.x);
+                return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${fmtClock(d)}`;
+              },
+              label: (item) => {
+                const p = item.raw;
+                if (item.datasetIndex === 2) return `Fit: ${p.y.toFixed(1)}% ±${(p.s ?? 0).toFixed(1)}`;
+                const r = p.r ?? {};
+                const extra = [isNum(r.e) ? `${r.e.toFixed(2)} Wh` : null, isNum(r.hours) ? `${r.hours.toFixed(1)} h` : null]
+                  .filter(Boolean).join(", ");
+                return `This discharge: ${p.y.toFixed(1)}%${extra ? ` (${extra})` : ""}`;
+              },
+            },
+          },
+        },
+      },
+    };
+  }
+
+  function setHealthRecords(list) {
+    healthRecords = list;
+    if (activeGroup !== "health") return;
+    clearTimeout(healthTimer);
+    healthTimer = setTimeout(redraw, 300);   // records arrive one by one on first load
+  }
+
   return {
     setSource(s) { source = s; load(); },
     noSource(text) { msg.textContent = text; redraw(); },
     addLive,
     redraw,
+    setHealthRecords,
     reload() { loadedSince = Infinity; load(); },
     get records() { return records; },
   };

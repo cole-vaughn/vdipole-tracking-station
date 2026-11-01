@@ -61,6 +61,10 @@ export const CONFIG = {
     maxGapS: 30,           // a data gap longer than this resets the detector
   },
 
+  // Battery health (SPEC 14). Bands (O12): 80 and above good (the USABC end-of-life line), 60 to 80 fair,
+  // under 60 replace (60 is a project choice, not cited). The log query is capped by the database rules at 500.
+  soh: { ratedWh: 26.6, goodAtOrAbovePct: 80, replaceBelowPct: 60, logLimit: 500 },
+
   // Measured 2026-10-31: about 1,050 to 1,110 RPM on the 12 V battery, about 650 on USB power (only while flashing).
   // Full speed on the battery spins the drawing at about the visual cap; USB power visibly slower.
   fan: { stallRpm: 200, maxVisualRps: 3, rpmAtMaxVisual: 1200 },

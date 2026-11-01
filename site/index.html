@@ -48,6 +48,7 @@
       <div><dt>Orbit data age</dt><dd id="d-tle">--</dd></div>
       <div><dt>RF baseline</dt><dd id="d-rf">--</dd></div>
       <div><dt>Charging inference (untuned)</dt><dd id="d-charge">--</dd></div>
+      <div><dt>Battery health log</dt><dd id="d-health">--</dd></div>
       <div><dt>Last error</dt><dd id="d-error">none</dd></div>
     </dl>
   </section>
@@ -96,7 +97,17 @@
         <div class="batt-text">
           <p class="big"><span id="batt-pct">--</span><span class="unit">%</span></p>
           <p class="batt-left"><span id="batt-left">--</span> left</p>
+          <button type="button" class="soh-pill" id="soh-pill" data-band="none" data-state="none" data-conf="none"
+            aria-expanded="false" aria-controls="soh-panel" aria-label="Battery health: no data yet. Show details.">
+            <span id="soh-text">SOH --</span><span class="est" id="soh-est" hidden>est.</span>
+          </button>
         </div>
+      </div>
+      <div class="soh-panel" id="soh-panel" role="region" aria-labelledby="soh-panel-h" hidden>
+        <h3 id="soh-panel-h">Battery health <span class="sub">state of health estimate</span></h3>
+        <dl id="soh-rows"></dl>
+        <p class="soh-uncal" id="soh-uncal" hidden>Uncalibrated: the current sensor's gain and offset are not measured yet, so every energy number carries its gain error.</p>
+        <p class="note">Estimate from voltage and current, not a lab capacity test. 80% is the usual end-of-life line (USABC); under 60% is this project's own "replace" line.</p>
       </div>
       <p class="warn" id="batt-warn" hidden></p>
       <dl class="detail">
@@ -181,6 +192,7 @@
     <header class="graphs-head">
       <h2 id="graphs-h">Graphs</h2>
       <div class="range" role="group" aria-label="Time range" id="range-group"></div>
+      <p class="range-note" id="range-note" hidden>Battery health is always all time</p>
     </header>
     <div class="tabs" role="tablist" aria-label="Graph groups" id="graph-tabs"></div>
     <p class="graphs-msg" id="graphs-msg" role="status"></p>
