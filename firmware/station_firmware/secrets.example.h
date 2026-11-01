@@ -18,3 +18,9 @@
 // The one Firebase Authentication (Email/Password) user the ESP32 signs in as.
 #define FIREBASE_USER_EMAIL    "esp32@example.com"
 #define FIREBASE_USER_PASSWORD "a-long-random-password"
+
+// Pass schedule for the reception quality score (not secret, but per install). Leave it empty until GitHub Pages is
+// enabled, then use your site's address, for example
+//   "https://<github user>.github.io/vdipole-tracking-station/data/passes.json"
+// Empty means no schedule: every score is tagged NO SCHEDULE.
+#define PASSES_URL             ""

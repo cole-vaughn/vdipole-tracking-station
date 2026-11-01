@@ -1,17 +1,17 @@
 /*
- * Satellite V-Dipole Tracking Station: complete ESP32 firmware (version 1.1)
+ * Satellite V-Dipole Tracking Station: complete ESP32 firmware (version 1.2)
  * ELEE 4230, ESP32 DOIT DevKit V1
  *
- * Everything in one sketch (plus soh.h):
+ * Everything in one sketch (plus rqs.h):
  *   - BMP388 temperature and pressure (I2C 0x77)
  *   - Thermistor chain and RF (AD8307) chain through the shared-ADC analog mux,
  *     each with a Kalman filter
  *   - Capacitive press sensor (square wave + LM339 timing), with press counter
  *   - INA219 on the 12 V line: voltage, current, power (128-sample averaging, read every 100 ms)
  *   - Battery estimator (energy counting + voltage check, saved to flash)
- *   - Battery state of health from normal use (soh.h, SPEC.md section 14)
+ *   - Reception quality score from the RF reading (rqs.h, SPEC.md section 14), with NTP time and a pass schedule
  *   - PC fan speed from the tach wire (3-pin fan)
- *   - 16x2 LCD with 7 pages (a capacitive press changes the page)
+ *   - 16x2 LCD with 5 pages (a capacitive press changes the page; it starts on RF and the score)
  *   - Firebase Realtime Database upload (replaces ThingSpeak), in its own task
  *
  * Libraries (Library Manager): Adafruit BMP3XX, Adafruit INA219, Adafruit BusIO,
@@ -19,11 +19,10 @@
  *
  * Setup: copy secrets.example.h to secrets.h and fill it in. See ../README.md.
  *
- * Search this file and soh.h for "PLACEHOLDER" to find every value that still needs a bench measurement.
+ * Search this file and rqs.h for "PLACEHOLDER" to find every value that still needs a bench measurement.
  *
- * NOTE: version 1.1 compiles with arduino-cli (esp32 core 3.3.12) but has not run on the station yet.
- * Test it with the checklist in ../README.md. The battery health logic in soh.h is tested on a PC
- * (npm run test:firmware).
+ * NOTE: version 1.2 compiles with arduino-cli (esp32 core 3.3.12) but has not run on the station yet.
+ * Test it with the checklist in ../README.md. The score logic in rqs.h is tested on a PC (npm run test:firmware).
  */
 
 #include <Wire.h>
@@ -35,13 +34,18 @@
 #include <HTTPClient.h>
 #include <Preferences.h>
 #include <math.h>
+#include <time.h>
 #include "esp_timer.h"
 #include "soc/gpio_reg.h"
 #include "soc/soc.h"
 #include "secrets.h"
-#include "soh.h"
+#include "rqs.h"
 
-#define FW_VERSION "vdipole-fw-1.1"
+#ifndef PASSES_URL
+#define PASSES_URL ""                 // an older secrets.h without it: no pass schedule (tag NO SCHEDULE)
+#endif
+
+#define FW_VERSION "vdipole-fw-1.2"
 
 // Shared telemetry snapshot (loop() writes, the upload task reads). Declared up here because the Arduino IDE
 // generates function prototypes at the top of the sketch, and buildTelemetryJson() takes this type.
@@ -57,6 +61,7 @@ struct Telemetry {
   bool  fanStalled;
   int   rssi;
   uint32_t uptimeS;
+  rqs::Result rq;
 };
 
 // ---------- General config ----------
@@ -65,15 +70,13 @@ struct Telemetry {
 #define CAP_INTERVAL_MS       100     // capacitive sensor, fast so a press feels instant
 #define INA_SAMPLE_MS         100     // INA219 read this often; each READ_INTERVAL_MS window is averaged
 #define LCD_REFRESH_MS        250
-#define SCREEN_COUNT          7
+#define SCREEN_COUNT          5
 #define BMP388_I2C_ADDR       0x77
 #define INA219_I2C_ADDR       0x40    // A0 and A1 tied to GND
 
 // ---------- Firebase config ----------
 #define LATEST_INTERVAL_MS    2000    // overwrites /station/latest (no storage growth)
-#define HISTORY_INTERVAL_MS   10000   // appends to /station/history (about 450 bytes per record)
-#define HEALTH_INTERVAL_MS    60000   // overwrites /station/health at most this often, only when it changed
-#define HEALTH_RETRY_MS       10000   // a /station/healthLog record that failed is retried this often
+#define HISTORY_INTERVAL_MS   10000   // appends to /station/history (about 640 bytes per record)
 #define TOKEN_REFRESH_MS      (50UL * 60UL * 1000UL)   // sign in again before the 1 hour token expires
 #define TOKEN_EXPIRY_MS       (58UL * 60UL * 1000UL)   // after this long the old token is treated as dead
 #define SIGNIN_MIN_GAP_MS     15000UL                  // never sign in more often than this
@@ -169,8 +172,9 @@ float countsToPinVolts(int counts) {
 #define R14             10000.0
 #define R15             10000.0
 
-// Offset against the BMP388 from CP3. Re-check it once the mux is in the path.
-#define BMP388_CALIBRATION_OFFSET  96.2
+// PLACEHOLDER: offset added to the THERMISTOR result (never to the BMP388), from the CP3 comparison with the BMP388.
+// It was called BMP388_CALIBRATION_OFFSET before 1.2. Run ../cal_thermistor and paste what it prints.
+#define THERM_OFFSET_C  96.2
 
 struct KalmanFilter1D {
   float estimate;
@@ -219,7 +223,7 @@ float thermistorVoltsToCelsius(float V_out) {
   float invT = (log(R_T / THERM_R0) / THERM_BETA) + (1.0 / T0_kelvin);
   float T_celsius = (1.0 / invT) - 273.15;
 
-  return T_celsius + BMP388_CALIBRATION_OFFSET;
+  return T_celsius + THERM_OFFSET_C;
 }
 
 // ===================================================================
@@ -412,7 +416,7 @@ const uint16_t INA219_CONFIG_AVG128 =
     (uint16_t)INA219_CONFIG_BVOLTAGERANGE_32V | (uint16_t)INA219_CONFIG_GAIN_8_320MV |
     (uint16_t)INA219_CONFIG_BADCRES_12BIT_128S_69MS | (uint16_t)INA219_CONFIG_SADCRES_12BIT_128S_69MS |
     (uint16_t)INA219_CONFIG_MODE_SANDBVOLT_CONTINUOUS;
-uint32_t inaConfigRewrites = 0;       // times the chip had lost the setting (a reset from a sharp load), shown by `h`
+uint32_t inaConfigRewrites = 0;       // times the chip had lost the setting (a reset from a sharp load), shown by `q`
 
 uint16_t ina219ReadConfig() {
   Wire.beginTransmission(INA219_I2C_ADDR);
@@ -472,7 +476,7 @@ void readINA219() {
 #define BATT_CELLS              3
 #define BATT_CAP_WH_RATED       26.6f
 #define BATT_USABLE_FRACTION    0.90f   // PLACEHOLDER: derating for age and optimistic labels. 1.0 trusts the label.
-#define BATT_R_INT_OHM          ((float)SOH_R_INT_OHM)   // PLACEHOLDER (0.25, set in soh.h): pack + wiring resistance for the sag correction
+#define BATT_R_INT_OHM          0.25f   // PLACEHOLDER: pack + wiring resistance for the sag correction
 #define BATT_AVG_TAU_S          120.0f
 #define BATT_CORR_PER_S         0.001f
 #define BATT_SAVE_EVERY_S       300
@@ -481,6 +485,13 @@ void readINA219() {
 
 const float BATT_CAP_WH = BATT_CAP_WH_RATED * BATT_USABLE_FRACTION;
 
+// Typical 18650 open-circuit voltage per cell -> percent
+const float CELL_V[]   = {4.20, 4.15, 4.11, 4.08, 4.02, 3.98, 3.95, 3.91, 3.87, 3.85, 3.84,
+                          3.82, 3.80, 3.79, 3.77, 3.75, 3.73, 3.71, 3.69, 3.61, 3.30, 3.00};
+const float CELL_PCT[] = { 100,   95,   90,   85,   80,   75,   70,   65,   60,   55,   50,
+                            45,   40,   35,   30,   25,   20,   15,   10,    5,    2,    0};
+const int   CELL_TABLE_N = sizeof(CELL_V) / sizeof(CELL_V[0]);
+
 Preferences prefs;
 float battRemWh = 0, battAvgPmW = 0, battUsedWh = 0, battPeakmA = 0;
 float battLoadV = NAN, battSocPct = NAN, battHoursLeft = NAN;
@@ -488,9 +499,17 @@ bool  battAvgInit = false;
 float battLastSavedWh = -1;
 unsigned long battLastSaveMs = 0, battLastUpdateMs = 0;
 
-// Typical 18650 open-circuit voltage per cell -> percent. The table lives in soh.h, shared with battery health.
 float socFromVoltage(float packV) {
-  return soh::socFromCellV(packV / BATT_CELLS);
+  float v = packV / BATT_CELLS;
+  if (v >= CELL_V[0]) return 100;
+  if (v <= CELL_V[CELL_TABLE_N - 1]) return 0;
+  for (int i = 0; i < CELL_TABLE_N - 1; i++) {
+    if (v >= CELL_V[i + 1]) {
+      float f = (v - CELL_V[i + 1]) / (CELL_V[i] - CELL_V[i + 1]);
+      return CELL_PCT[i + 1] + f * (CELL_PCT[i] - CELL_PCT[i + 1]);
+    }
+  }
+  return 0;
 }
 
 void battSave() {
@@ -591,6 +610,8 @@ float thermRaw = 0, thermFiltered = 0;
 float rfRawDBm = 0, rfFiltered = 0;
 int   thermCounts = 0, rfCounts = 0;
 
+rqs::Engine rqsEng;                       // reception quality score (about 6 KB); see the RQS section below
+
 Telemetry tel;
 SemaphoreHandle_t telMutex;
 volatile bool touchEventPending = false;   // a press or release that should reach the website at once
@@ -609,6 +630,7 @@ void refreshTelemetry() {
   tel.fanRpm = fanRpm;  tel.fanStalled = fanStalled;
   tel.rssi = (WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : 0;
   tel.uptimeS = (uint32_t)(millis() / 1000UL);
+  tel.rq = rqsEng.result();
   xSemaphoreGive(telMutex);
 }
 
@@ -624,103 +646,50 @@ void refreshTouchTelemetry() {
 }
 
 // ===================================================================
-// BATTERY HEALTH (soh.h, SPEC.md section 14)
+// RECEPTION QUALITY SCORE (rqs.h, SPEC.md section 14)
 // ===================================================================
-// soh.h does the work and is tested on a PC. This part feeds it the 2 s averages, keeps its blobs in flash,
-// and hands the two Firebase records to the upload task.
-#define SOH_TEMP_FROM_THERMISTOR  0   // 0: BMP388 box air (the default). 1: the thermistor, once it is verified.
+// rqs.h does the work and is tested on a PC. This part feeds it one sample every READ_INTERVAL_MS, keeps the clock
+// (NTP) and takes the pass schedule from the upload task. Temperature comes from the BMP388 only, never the thermistors.
+unsigned long rqsLastMs = 0;
+bool warmCsv = false;                 // serial `w`: CSV for the warm-up test that fits RQS_ALPHA_T_DB_PER_C
 
-soh::Estimator sohEst;
-unsigned long sohLastMs = 0;
-uint32_t sohSeenResults = 0;
-unsigned long sohResetAskMs = 0;      // when `z` asked for confirmation (0: not asking)
-uint8_t sohBlob[soh::kBlobMax];
+// Shared with the upload task, under telMutex: it parses a fetched schedule into schedNext, loop() copies it in.
+rqs::Schedule schedNext;
+volatile bool schedNextReady = false;
+volatile int schedLastCode = 0;       // last fetch: HTTP code, -1 file unreadable, -2 too big, 0 none yet
+volatile unsigned long schedLastOkMs = 0;
 
-// Shared with the upload task, under telMutex.
-char healthJsonBuf[320] = "";
-uint32_t healthSeq = 0;               // goes up whenever the /station/health record changes
-char healthLogBuf[320] = "";
-uint32_t healthLogSeq = 0;            // goes up when a new /station/healthLog record is waiting
-volatile uint32_t healthLogSentSeq = 0;   // set by the upload task after a successful POST
-volatile bool healthUrgent = true;        // send /station/health soon (after a start or a closed slice)
-
-void sohPutBlob(const char* key, size_t n) {
-  if (n) prefs.putBytes(key, sohBlob, n);
+// Unix seconds from NTP, or 0 while the clock is not set.
+int64_t utcNow() {
+  int64_t t = (int64_t)time(nullptr);
+  return t >= RQS_CLOCK_SET_UTC ? t : 0;
 }
 
-// Write whatever soh.h asked to save. Remove first: closing a slice and starting one never share a step,
-// but the order keeps the newest open slice if they ever did.
-void sohSave() {
-  uint8_t f = sohEst.takeSaves();
-  if ((f & soh::REMOVE_OPEN) && prefs.isKey("sohOpen")) prefs.remove("sohOpen");
-  if (f & soh::SAVE_SLICES) sohPutBlob("sohSlices", sohEst.saveSlices(sohBlob, sizeof sohBlob));
-  if (f & soh::SAVE_STATE)  sohPutBlob("sohState", sohEst.saveState(sohBlob, sizeof sohBlob));
-  if (f & soh::SAVE_OPEN)   sohPutBlob("sohOpen", sohEst.saveOpen(sohBlob, sizeof sohBlob));
-}
-
-size_t sohReadBlob(const char* key) {
-  if (!prefs.isKey(key)) return 0;     // normal on the first start
-  return prefs.getBytes(key, sohBlob, sizeof sohBlob);
-}
-
-void sohQueueLog() {
-  char buf[320];
-  if (soh::resultJson(sohEst.result, buf, sizeof buf) < 0) return;
-  xSemaphoreTake(telMutex, portMAX_DELAY);
-  strcpy(healthLogBuf, buf);
-  healthLogSeq++;
-  xSemaphoreGive(telMutex);
-}
-
-void sohRefreshHealth() {
-  char buf[320];
-  if (soh::healthJson(sohEst.status(), INA219_CALIBRATED, buf, sizeof buf) < 0) return;
-  xSemaphoreTake(telMutex, portMAX_DELAY);
-  if (strcmp(buf, healthJsonBuf) != 0) {
-    strcpy(healthJsonBuf, buf);
-    healthSeq++;
+// Every READ_INTERVAL_MS, after the RF read and batteryUpdate().
+void rqsUpdate() {
+  if (schedNextReady) {
+    xSemaphoreTake(telMutex, portMAX_DELAY);
+    rqsEng.setSchedule(schedNext);
+    schedNextReady = false;
+    xSemaphoreGive(telMutex);
   }
-  xSemaphoreGive(telMutex);
-}
-
-// After batteryInit() (Preferences is open). A corrupt blob resets only its own part.
-void sohInit() {
-  size_t n = sohReadBlob("sohSlices");
-  if (n && !sohEst.loadSlices(sohBlob, n)) Serial.println(F("Battery health: saved slices unreadable, starting them fresh."));
-  n = sohReadBlob("sohState");
-  if (n && !sohEst.loadState(sohBlob, n)) Serial.println(F("Battery health: saved state unreadable, starting it fresh."));
-  n = sohReadBlob("sohOpen");
-  if (n) sohEst.loadOpen(sohBlob, n);  // a start ends the slice that was open, at its last saved end point
-  sohSave();
-  if (sohEst.resultPending) sohQueueLog();   // closed just now, or never reached Firebase before the restart
-  sohSeenResults = sohEst.resultCount;
-  sohRefreshHealth();
-  soh::Status st = sohEst.status();
-  Serial.print(F("Battery health: "));
-  Serial.print(st.slices); Serial.print(F(" slices, "));
-  if (st.conf == soh::CONF_NONE) Serial.println(F("no estimate yet."));
-  else { Serial.print(F("SOH ")); Serial.print(st.sohPct, 1); Serial.print(F("% +-")); Serial.println(st.sigmaPct, 1); }
-}
-
-// Every READ_INTERVAL_MS, after readINA219() and batteryUpdate().
-void sohUpdate() {
   unsigned long now = millis();
-  soh::Sample s;
-  s.dtS   = sohLastMs ? (now - sohLastMs) / 1000.0f : READ_INTERVAL_MS / 1000.0f;
-  s.battV = inaOk ? inaBusV + inaShuntmV / 1000.0f : NAN;
-  s.mA    = inaOk ? inaCurrentmA : NAN;
-  s.mW    = inaOk ? inaPowermW : NAN;
-  s.tempC = SOH_TEMP_FROM_THERMISTOR ? thermFiltered : tempC;   // NaN when the BMP388 is missing
-  sohLastMs = now;
-  sohEst.step(s);
-
-  if (sohEst.resultCount != sohSeenResults) {       // a slice closed, or `z`: queue its log record
-    sohSeenResults = sohEst.resultCount;
-    sohQueueLog();
+  rqs::Input in;
+  in.dtS    = rqsLastMs ? (now - rqsLastMs) / 1000.0f : READ_INTERVAL_MS / 1000.0f;
+  in.rfDbm  = rfFiltered;
+  in.tempC  = tempC;                  // raw bmp.temperature: NaN when bmpOk is false or the read failed
+  in.socPct = inaOk ? battSocPct : NAN;
+  in.nowUtc = utcNow();
+  rqsLastMs = now;
+  const rqs::Result& r = rqsEng.step(in);
+  if (warmCsv) {
+    Serial.print(F("WARM,")); Serial.print(now);
+    Serial.print(','); Serial.print(rfFiltered, 3);
+    Serial.print(','); Serial.print(rfRawDBm, 3);
+    Serial.print(','); Serial.print(tempC, 3);
+    Serial.print(','); Serial.print(r.tempC, 3);       // nan when the BMP388 sample was rejected
+    Serial.print(','); Serial.println(r.rfComp, 3);
   }
-  if (sohEst.resultPending && healthLogSeq != 0 && healthLogSentSeq == healthLogSeq) sohEst.markPosted();
-  sohSave();
-  sohRefreshHealth();
 }
 
 // ===================================================================
@@ -731,10 +700,10 @@ void sohUpdate() {
 //   /station/history  one record appended every HISTORY_INTERVAL_MS (push id keys)
 //   /station/touch    written at once when the press state changes
 //   /station/meta     written once per boot
-//   /station/health     battery health summary, at most once a minute when it changed
-//   /station/healthLog  one record per closed discharge slice (push id keys)
+// It also fetches the pass schedule for the RQS (needs only WiFi, not Firebase).
 WiFiClientSecure authClient;
 WiFiClientSecure dbClient;
+WiFiClientSecure schedClient;         // pass schedule only: connects every few hours and closes at once
 String fbIdToken;
 unsigned long fbTokenMs = 0;
 bool fbAuthOk = false;
@@ -762,9 +731,10 @@ String jsonString(const String& payload, const char* key) {
   return payload.substring(q1 + 1, q2);
 }
 
-String buildTelemetryJson(const Telemetry& t) {
+// withParts adds the four RQS parts, which go in /station/latest only (SPEC 14.12).
+String buildTelemetryJson(const Telemetry& t, bool withParts) {
   String s;
-  s.reserve(720);
+  s.reserve(800);
   s += "{\"ts\":{\".sv\":\"timestamp\"}";
   s += ",\"tempC\":" + jnum(t.tempC, 2);
   s += ",\"pressHPa\":" + jnum(t.pressHPa, 2);
@@ -790,8 +760,47 @@ String buildTelemetryJson(const Telemetry& t) {
   s += ",\"fanStalled\":" + jbool(t.fanStalled);
   s += ",\"rssi\":" + String(t.rssi);
   s += ",\"uptimeS\":" + String(t.uptimeS);
+  char rq[360];
+  if (rqs::appendJson(t.rq, withParts, rq, sizeof rq) > 0) s += rq;
   s += "}";
   return s;
+}
+
+// Pass schedule (SPEC 14.8): data/passes.json from the website, about 3 KB. The certificate is checked against the
+// core's built-in bundle, unlike the two Firebase connections.
+bool fetchSchedule() {
+  static rqs::Schedule parsed;        // about 2.5 KB, kept off the task stack
+  HTTPClient http;
+  schedClient.useBuiltinCACertBundle();
+  http.setTimeout(8000);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  if (!http.begin(schedClient, PASSES_URL)) { schedLastCode = -100; return false; }
+  int code = http.GET();
+  bool ok = false;
+  if (code == 200) {
+    if (http.getSize() > 16384) {
+      code = -2;
+    } else {
+      String body = http.getString();
+      if (body.length() <= 16384 && rqs::parseSchedule(body.c_str(), body.length(), parsed)) {
+        xSemaphoreTake(telMutex, portMAX_DELAY);
+        schedNext = parsed;
+        schedNextReady = true;
+        xSemaphoreGive(telMutex);
+        schedLastOkMs = millis();
+        ok = true;
+      } else {
+        code = -1;
+      }
+    }
+  }
+  schedLastCode = code;
+  http.end();
+  schedClient.stop();
+  Serial.print(F("Pass schedule fetch -> "));
+  if (ok) { Serial.print(parsed.n); Serial.println(F(" passes")); }
+  else { Serial.print(F("failed, code ")); Serial.println(code); }
+  return ok;
 }
 
 bool fbSignIn() {
@@ -838,9 +847,8 @@ int fbSend(const char* method, const char* path, const String& json) {
 }
 
 void uploadTask(void* arg) {
-  unsigned long lastLatest = 0, lastHistory = 0, lastSignInTry = 0, lastHealth = 0, lastLogTry = 0;
-  uint32_t healthSentSeq = 0;
-  bool metaSent = false;
+  unsigned long lastLatest = 0, lastHistory = 0, lastSignInTry = 0, lastSchedTry = 0;
+  bool metaSent = false, schedOk = false;
   for (;;) {
     if (WiFi.status() != WL_CONNECTED) {
       fbOnline = false;
@@ -848,6 +856,14 @@ void uploadTask(void* arg) {
       continue;
     }
     unsigned long now = millis();
+
+    // The pass schedule needs only WiFi, so it is fetched before (and without) the Firebase sign-in.
+    if (PASSES_URL[0] &&
+        (lastSchedTry == 0 || now - lastSchedTry >= (schedOk ? RQS_SCHED_EVERY_S : RQS_SCHED_RETRY_S) * 1000UL)) {
+      lastSchedTry = now;
+      schedOk = fetchSchedule();
+    }
+
     if (!fbAuthOk || (now - fbTokenMs) > TOKEN_REFRESH_MS) {
       // At most one sign-in attempt per SIGNIN_MIN_GAP_MS, even if the database keeps refusing the token.
       if (lastSignInTry != 0 && (now - lastSignInTry) < SIGNIN_MIN_GAP_MS) {
@@ -871,7 +887,8 @@ void uploadTask(void* arg) {
     xSemaphoreGive(telMutex);
 
     if (!metaSent) {
-      String meta = String("{\"fw\":\"") + FW_VERSION + "\",\"bootTs\":{\".sv\":\"timestamp\"}}";
+      String meta = String("{\"fw\":\"") + FW_VERSION + "\",\"bootTs\":{\".sv\":\"timestamp\"},\"rqsAlphaT\":" +
+                    String(RQS_ALPHA_T_DB_PER_C, 4) + "}";
       if (fbSend("PUT", "/station/meta", meta) == 200) metaSent = true;
     }
 
@@ -884,36 +901,11 @@ void uploadTask(void* arg) {
 
     if (now - lastLatest >= LATEST_INTERVAL_MS) {
       lastLatest = now;
-      fbSend("PUT", "/station/latest", buildTelemetryJson(t));
+      fbSend("PUT", "/station/latest", buildTelemetryJson(t, true));
     }
     if (now - lastHistory >= HISTORY_INTERVAL_MS) {
       lastHistory = now;
-      fbSend("POST", "/station/history", buildTelemetryJson(t));
-    }
-
-    // Battery health: a waiting log record first (it changes the fit), then the summary.
-    if (healthLogSeq != healthLogSentSeq && (lastLogTry == 0 || now - lastLogTry >= HEALTH_RETRY_MS)) {
-      lastLogTry = now;
-      xSemaphoreTake(telMutex, portMAX_DELAY);
-      String rec = healthLogBuf;
-      uint32_t seq = healthLogSeq;
-      xSemaphoreGive(telMutex);
-      if (fbSend("POST", "/station/healthLog", rec) == 200) {
-        healthLogSentSeq = seq;
-        healthUrgent = true;
-      }
-    }
-    if (healthSeq != healthSentSeq &&
-        ((healthUrgent && now - lastHealth >= HEALTH_RETRY_MS) || now - lastHealth >= HEALTH_INTERVAL_MS)) {
-      lastHealth = now;
-      xSemaphoreTake(telMutex, portMAX_DELAY);
-      String rec = healthJsonBuf;
-      uint32_t seq = healthSeq;
-      xSemaphoreGive(telMutex);
-      if (fbSend("PUT", "/station/health", rec) == 200) {
-        healthSentSeq = seq;
-        healthUrgent = false;
-      }
+      fbSend("POST", "/station/history", buildTelemetryJson(t, false));
     }
     vTaskDelay(50 / portTICK_PERIOD_MS);
   }
@@ -933,52 +925,48 @@ void lcdLine(int row, const String& text) {
   lcd.print(s.substring(0, 16));
 }
 
+// Five pages (SPEC 15.1). Page 0, RF and the score, is the one shown at power on; each press goes to the next.
 void drawScreen() {
-  char a[24], b[24];
+  char a[24], b[24], t[12];
   switch (screenIndex) {
-    case 0:
-      lcdLine(0, "Temp: " + String(tempC, 1) + " C");
-      lcdLine(1, "P:" + String(pressHPa, 0) + "hPa Alt:" + String(altitudeM, 0));
-      break;
-    case 1:
-      lcdLine(0, "Therm Raw:" + String(thermRaw, 1));
-      lcdLine(1, "Filt: " + String(thermFiltered, 2) + " C");
-      break;
-    case 2:
-      lcdLine(0, "RF Raw:" + String(rfRawDBm, 1) + "dBm");
-      lcdLine(1, "Filt: " + String(rfFiltered, 2) + " dBm");
-      break;
-    case 3:
-      if (capFault) {
-        lcdLine(0, "Cap FAULT");
-        lcdLine(1, "check wiring");
-      } else {
-        lcdLine(0, "Cap td:" + String(capTdUs, 1) + "us");
-        lcdLine(1, "d:" + String(capDeltaUs, 1) + (capPressed ? " PRESSED" : " idle"));
-      }
-      break;
-    case 4:   // battery voltage, current, power
-      if (!inaOk) { lcdLine(0, "INA219 missing"); lcdLine(1, "check wiring"); break; }
-      if (fabs(inaCurrentmA) >= 1000.0f) snprintf(a, sizeof(a), "%5.2fV %6.3fA", battLoadV, inaCurrentmA / 1000.0f);
-      else                                snprintf(a, sizeof(a), "%5.2fV %6.1fmA", battLoadV, inaCurrentmA);
-      snprintf(b, sizeof(b), "P:%4.0fmW pk%4.0f", inaPowermW, battPeakmA);
+    case 0: {   // RF strength and the reception quality score
+      const rqs::Result& q = rqsEng.result();
+      if (q.scored) snprintf(a, sizeof(a), "RF%6.1f %+5.1fdB", rfFiltered, q.excessDb);
+      else          snprintf(a, sizeof(a), "RF %.1f dBm", rfFiltered);
+      if (!q.scored) snprintf(b, sizeof(b), "RQS warming up");
+      else           snprintf(b, sizeof(b), "RQS %.0f %s", q.rqs,           // label and tag take turns every 2 s
+                              (millis() / 2000) % 2 ? rqs::tagShort(q.tag) : rqs::labelText(q.label));
       lcdLine(0, a); lcdLine(1, b);
       break;
-    case 5:   // battery charge and time left
-      if (!inaOk) { lcdLine(0, "INA219 missing"); lcdLine(1, "check wiring"); break; }
-      if (battLoadV < BATT_LOW_VOLTS)           snprintf(a, sizeof(a), "%3.0f%% LOW VOLTAGE", battSocPct);
-      else if (battSocPct < BATT_LOW_PERCENT)   snprintf(a, sizeof(a), "SOC %2.0f%% LOW!", battSocPct);
-      else                                      snprintf(a, sizeof(a), "SOC %2.0f%% %4.1fWh", battSocPct, battRemWh);
-      if (isnan(battHoursLeft))                 snprintf(b, sizeof(b), "Left --");
-      else if (battHoursLeft >= 100.0f)         snprintf(b, sizeof(b), "Left >99h");
-      else                                      snprintf(b, sizeof(b), "Left %2dh%02dm", (int)battHoursLeft, (int)((battHoursLeft - (int)battHoursLeft) * 60.0f));
+    }
+    case 1:     // temperatures
+      if (isnan(tempC))         snprintf(a, sizeof(a), "BMP388     --");
+      else                      snprintf(a, sizeof(a), "BMP388 %6.1f C", tempC);
+      if (isnan(thermFiltered)) snprintf(b, sizeof(b), "Therm      --");
+      else                      snprintf(b, sizeof(b), "Therm  %6.1f C", thermFiltered);
       lcdLine(0, a); lcdLine(1, b);
       break;
-    case 6:   // fan and uplink
+    case 2:     // pressure and altitude (BMP388)
+      if (isnan(pressHPa)) { lcdLine(0, "P -- hPa"); lcdLine(1, "Alt -- m"); break; }
+      snprintf(a, sizeof(a), "P %7.1f hPa", pressHPa);
+      snprintf(b, sizeof(b), "Alt %5.0f m", altitudeM);
+      lcdLine(0, a); lcdLine(1, b);
+      break;
+    case 3:     // fan
       if (isnan(fanRpm)) snprintf(a, sizeof(a), "Fan -- RPM");
-      else               snprintf(a, sizeof(a), "Fan %4.0f RPM%s", fanRpm, fanStalled ? " !" : "");
-      if (WiFi.status() != WL_CONNECTED) snprintf(b, sizeof(b), "WiFi down");
-      else snprintf(b, sizeof(b), "FB:%s %ddBm", fbOnline ? "OK" : "ERR", WiFi.RSSI());
+      else               snprintf(a, sizeof(a), "Fan %4.0f RPM", fanRpm);
+      lcdLine(0, a);
+      lcdLine(1, !FAN_ENABLED ? "off" : isnan(fanRpm) ? "--" : fanStalled ? "STALLED" : "ok");
+      break;
+    case 4:     // battery current and time left
+      if (!inaOk) { lcdLine(0, "INA219 missing"); lcdLine(1, "check wiring"); break; }
+      if (fabs(inaCurrentmA) >= 1000.0f) snprintf(a, sizeof(a), "I %6.3f A", inaCurrentmA / 1000.0f);
+      else                                snprintf(a, sizeof(a), "I %6.1f mA", inaCurrentmA);
+      if (isnan(battHoursLeft))           snprintf(t, sizeof(t), "--");
+      else if (battHoursLeft >= 100.0f)   snprintf(t, sizeof(t), ">99h");
+      else snprintf(t, sizeof(t), "%dh%02dm", (int)battHoursLeft, (int)((battHoursLeft - (int)battHoursLeft) * 60.0f));
+      snprintf(b, sizeof(b), "%3.0f%% %s %s", battSocPct,
+               (battLoadV < BATT_LOW_VOLTS || battSocPct < BATT_LOW_PERCENT) ? "LOW " : "left", t);
       lcdLine(0, a); lcdLine(1, b);
       break;
   }
@@ -1000,6 +988,19 @@ void printToSerial() {
   Serial.print(F(" dBm  Filtered: ")); Serial.print(rfFiltered, 2);
   Serial.println(F(" dBm"));
 
+  const rqs::Result& q = rqsEng.result();
+  Serial.print(F("RQS     "));
+  if (q.scored) {
+    Serial.print(q.rqs, 1); Serial.print(' '); Serial.print(rqs::labelText(q.label));
+    Serial.print(F("  excess ")); Serial.print(q.excessDb, 2);
+    Serial.print(F(" dB  baseline ")); Serial.print(q.baselineDbm, 2); Serial.print(F(" dBm"));
+    if (q.detected) Serial.print(F("  DETECTED"));
+  } else {
+    Serial.print(F("warming up (")); Serial.print(q.training); Serial.print(F(" of ")); Serial.print(RQS_MIN_TRAIN_N);
+    Serial.print(')');
+  }
+  Serial.print(F("  tag ")); Serial.println(rqs::tagText(q.tag));
+
   Serial.print(F("Cap     td: ")); Serial.print(capTdUs, 2);
   Serial.print(F(" us  delta: ")); Serial.print(capDeltaUs, 2);
   Serial.print(F(" us  C: ")); Serial.print(capPF, 1);
@@ -1014,17 +1015,6 @@ void printToSerial() {
     Serial.print(F("%  left: ")); Serial.print(battRemWh, 2); Serial.print(F(" Wh"));
     if (!isnan(battHoursLeft)) { Serial.print(F(" = ")); Serial.print(battHoursLeft, 1); Serial.print(F(" h")); }
     Serial.print(F("  used: ")); Serial.print(battUsedWh, 3); Serial.println(F(" Wh"));
-
-    soh::Status hs = sohEst.status();
-    Serial.print(F("Health  SOH: "));
-    if (hs.conf == soh::CONF_NONE) {
-      Serial.print(F("learning ")); Serial.print(hs.progressPct, 0); Serial.print('%');
-    } else {
-      Serial.print(hs.sohPct, 1); Serial.print(F("% +-")); Serial.print(hs.sigmaPct, 1);
-      Serial.print(F(" (")); Serial.print(soh::confText(hs.conf)); Serial.print(')');
-    }
-    Serial.print(F("  learner: ")); Serial.print(soh::learnText(hs.learn));
-    Serial.print(F("  cycles: ")); Serial.println(hs.cycles, 2);
   }
 
   Serial.print(F("Fan     RPM: ")); Serial.print(fanRpm, 0);
@@ -1073,34 +1063,27 @@ void muxTest() {
   Serial.println(F("  'both blocked' should be near 0 V. A big number means a shunt transistor is not turning on."));
 }
 
-void printHealthReport() {
-  Serial.println(F("--- Battery health ---"));
-  sohEst.debugLines([](const char* line, void* ctx) { (void)ctx; Serial.println(line); }, nullptr);
+void printRqsReport() {
+  Serial.println(F("--- Reception quality score ---"));
+  rqsEng.debugLines([](const char* line, void* ctx) { (void)ctx; Serial.println(line); }, nullptr, utcNow());
+  Serial.print(F("Schedule fetch: "));
+  if (!PASSES_URL[0]) {
+    Serial.println(F("PASSES_URL is empty in secrets.h (set it once GitHub Pages is enabled)"));
+  } else {
+    Serial.print(F("last result ")); Serial.print(schedLastCode);
+    Serial.print(F(" (200 ok, -1 file unreadable, -2 too big, 0 not tried yet)"));
+    if (schedLastOkMs) { Serial.print(F(", last success ")); Serial.print((millis() - schedLastOkMs) / 60000UL); Serial.print(F(" min ago")); }
+    Serial.println();
+  }
   Serial.print(F("INA219: "));
   Serial.print(INA219_CALIBRATED ? F("calibrated") : F("uncalibrated (PLACEHOLDER gain and offset)"));
   Serial.print(F(", averaging restored ")); Serial.print(inaConfigRewrites); Serial.println(F(" times"));
-  Serial.println(healthLogSentSeq == healthLogSeq ? F("Health log: all records sent") : F("Health log: a record is waiting for Firebase"));
 }
 
 void handleSerial() {
-  if (sohResetAskMs && millis() - sohResetAskMs > 10000) {
-    sohResetAskMs = 0;
-    Serial.println(F("Battery health reset cancelled (no answer)."));
-  }
   while (Serial.available()) {
     char c = Serial.read();
     if (c == '\r' || c == '\n' || c == ' ') continue;
-    if (sohResetAskMs) {               // waiting for the `z` confirmation: only y resets, anything else cancels
-      sohResetAskMs = 0;
-      if (c == 'y') {
-        sohEst.resetAll();
-        sohSave();
-        Serial.println(F("Battery health reset. Learning starts again from the next discharge."));
-      } else {
-        Serial.println(F("Battery health reset cancelled."));
-      }
-      continue;
-    }
     if (c == 'b') {
       Serial.println(F("Recapturing cap baseline, hands off the pad..."));
       if (capCaptureBaseline()) { Serial.print(F("Baseline: ")); Serial.print(capBaselineUs, 2); Serial.println(F(" us")); }
@@ -1121,11 +1104,16 @@ void handleSerial() {
     } else if (c == 'x') {
       prefs.remove("remWh");
       Serial.println(F("Saved battery value cleared. Reboot to restart from the voltage reading."));
-    } else if (c == 'h') {
-      printHealthReport();
-    } else if (c == 'z') {
-      sohResetAskMs = millis() | 1;
-      Serial.println(F("Reset ALL battery health learning (slices, fit, cycle count)? Type y within 10 s to confirm."));
+    } else if (c == 't') {
+      rqsEng.testMode = !rqsEng.testMode;
+      Serial.println(rqsEng.testMode ? F("RQS TEST MODE on: pass part fixed at 0.5, tag TEST. A restart turns it off.")
+                                     : F("RQS TEST MODE off."));
+    } else if (c == 'q') {
+      printRqsReport();
+    } else if (c == 'w') {
+      warmCsv = !warmCsv;
+      if (warmCsv) Serial.println(F("WARM,ms,rfFilt,rfRaw,tempRaw,tempSmooth,rfComp"));
+      else Serial.println(F("Warm-up CSV OFF"));
     }
   }
 }
@@ -1152,7 +1140,7 @@ void readAllSensors() {
 
   readINA219();
   batteryUpdate();
-  sohUpdate();
+  rqsUpdate();
   updateFanRpm(millis());
   refreshTelemetry();
 }
@@ -1212,7 +1200,6 @@ void setup() {
     Serial.println(F("INA219 not found, continuing without it."));
   }
   batteryInit();
-  sohInit();
 
   // Fan tach: open-collector output, one falling edge per pulse. The external 10k pull-up sits on the fan side of the
   // 10k series resistor. No internal pull-up: it would sit on the GPIO side and lift a low to about 0.6 V.
@@ -1238,6 +1225,7 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");   // UTC for the pass schedule; syncs once WiFi is up
   unsigned long wifiStart = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < 20000) {
     delay(500);
@@ -1256,7 +1244,7 @@ void setup() {
 
   Serial.println(F("Commands: b = new cap baseline, s = toggle cap stream, c = cap raw dump, m = mux test,"));
   Serial.println(F("          f = battery is full, r = reset peak current, x = clear saved battery value,"));
-  Serial.println(F("          h = battery health report, z = reset battery health (asks first)"));
+  Serial.println(F("          t = RQS test mode, q = RQS report, w = warm-up CSV"));
   Serial.println(F("Setup complete.\n"));
 }
 
