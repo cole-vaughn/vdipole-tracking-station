@@ -27,6 +27,8 @@ jobs:
       - run: npm ci
       - name: Secret scan
         run: npm run scan
+      - name: Firmware logic tests (battery health, on the PC)
+        run: npm run test:firmware
       - name: Unit tests
         run: npm run test:unit
       - run: npx playwright install --with-deps chromium

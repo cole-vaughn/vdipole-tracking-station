@@ -27,7 +27,7 @@ GitHub Actions, every 6 h --> CelesTrak orbit data --> site/data/gp.json --> thi
 | `site/data/gp.json` | Orbit data. Refreshed on every deploy. |
 | `site/vendor/` | Self-hosted three.js, globe.gl and satellite.js, bundled by `npm run vendor` (do not edit by hand). |
 | `site/textures/` | Earth textures (4K for laptops, 2K for phones). |
-| `tests/` | Unit tests, browser tests, the labeled fixture data source, the local preview server, the secret scan. |
+| `tests/` | Unit tests, browser tests, firmware logic tests (`tests/firmware/`, with a SYNTHETIC simulated pack), the labeled fixture data source, the local preview server, the secret scan. |
 | `tools/fetch-orbit.mjs` | Downloads orbit data from CelesTrak. |
 | `tools/vendor.mjs` | Rebuilds `site/vendor/` from the versions pinned in `package.json`. |
 | `firmware/` | ESP32 firmware and its own README (pin map, Firebase setup, hardware checklist). |
@@ -50,7 +50,8 @@ commit the result.
 ## Tests
 
 ```sh
-npm test               # unit tests, then browser tests (desktop and 360 px phone)
+npm test               # firmware logic tests, unit tests, then browser tests (desktop and 360 px phone)
+npm run test:firmware  # battery health logic on this computer (add -- -v for the accuracy table)
 npm run screenshots    # writes tests/screenshots/desktop.png and phone.png for review
 npm run scan           # secret scan (also runs before every commit and in CI)
 ```

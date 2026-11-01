@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "node tests/serve.mjs",
     "dev:fixtures": "node tests/serve.mjs --fixtures",
-    "test": "npm run test:unit && npm run test:e2e",
+    "test": "npm run test:firmware && npm run test:unit && npm run test:e2e",
+    "test:firmware": "node tests/firmware/run.mjs",
     "test:unit": "node --test tests/unit/*.test.mjs",
     "test:e2e": "playwright test",
     "screenshots": "playwright test --grep @screens",

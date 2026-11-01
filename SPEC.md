@@ -1,7 +1,7 @@
 # Satellite V-Dipole Tracking Station: Dashboard v2 Spec
 
-Status: v1 site built (section 13). Battery state of health (section 14) is designed and waiting for Cole's approval.
-Last updated: 2026-10-31. This file replaces the draft PDF as the source of truth.
+Status: v1 site built (section 13). Battery state of health (section 14) approved; step S1 (logic and PC tests) built, S2 to S4 in progress.
+Last updated: 2026-11-01. This file replaces the draft PDF as the source of truth.
 
 Rules that apply to everything below:
 
@@ -293,7 +293,7 @@ Built differently from the draft, on purpose:
 
 ## 14. Battery state of health (the course "go beyond" algorithm)
 
-Status: designed 2026-10-31 with Cole's answers (O9 to O12). Nothing is built yet. Waiting for approval of the plan in 14.19.
+Status: designed 2026-10-31 with Cole's answers (O9 to O12) and approved the same day. S1 built 2026-11-01: `firmware/station_firmware/soh.h` and its PC tests. S2 to S4 in progress (14.19). Details settled or changed while building S1 are marked "(S1)".
 
 ### 14.1 What it is, and how it meets the course
 
@@ -335,11 +335,16 @@ There are no learning runs and no special procedure (Cole's choice). The station
 
 | Anchor | When | SOE and its uncertainty |
 |---|---|---|
-| Full | The charger held the pack full (V_oc at or above 12.54 V, 4.18 V per cell) and was then unplugged. The last full moment is the anchor. | 100, plus or minus 1 point (the charger defines full better than the table) |
-| Quasi-rest | Every 2 s window where: current under 300 mA; current steady over 2 minutes (within 5% or 8 mA, whichever is larger); voltage not rising (at most +2 mV per minute) and not collapsing (falling slower than 30 mV per minute); at least 60 minutes after a charge ended (the voltage needs that long to settle); temperature known. | From the table. Uncertainty = voltage uncertainty / slope of the curve there. Voltage uncertainty: 15 mV per cell for the generic table (PLACEHOLDER) plus I x 0.1 ohm for the resistance guess. |
-| Cutoff | Battery voltage at or below 9.5 V for 30 s. | From the table (about 1), small uncertainty because the curve is steep there |
+| Full | The charger held V_oc at or above 12.54 V (4.18 V per cell) for at least 20 minutes (PLACEHOLDER), then let go (unplugged, or it finished). The moment it let go is the anchor. (S1) While charging, V_oc reads high by the charge current times the resistance, so 12.54 V is reached when the charger switches to constant voltage, not at full; the 20 minutes give it time to top the pack off. | 100, plus or minus 1 point (the charger defines full better than the table) |
+| Quasi-rest | Every 2 s window where: current under 300 mA; current steady over 2 minutes (within 5% or 8 mA, whichever is larger); voltage not rising (at most +2 mV per minute) and not collapsing (falling slower than 30 mV per minute); at least 60 minutes after a charge ended or the station started (S1: it may have been charged while off); temperature known. The voltage used is the straight-line fit over those 2 minutes, at the present moment. | From the table. Uncertainty = voltage uncertainty / slope of the curve there, at least 1 point. Voltage uncertainty: 15 mV per cell for the generic table (PLACEHOLDER) plus I x 0.1 ohm for the resistance guess. |
+| Cutoff | Battery voltage at or below 9.5 V for 30 s. (S1) The slice closes right away, since the pack is empty; the learner then waits for a charge. | From the table (about 1), at least 1 point |
 
-**A stretch** is one continuous discharge: from a charge ending (or a boot) to the next charge starting (or power off). Charger plugged in is detected when V_oc rises 60 mV above the stretch's lowest value for 60 s.
+**A stretch** is one continuous discharge: from a charge ending (or a start) to the next charge starting (or power off). The charger is inferred from a smoothed V_oc (30 s, so a short load change cannot trip it):
+
+- Plugged in: 60 mV above the stretch's lowest value for 60 s.
+- Gone: 60 mV below the highest charging value, or back under 12.54 V after reaching it, for 60 s.
+- (S1) If the station starts with V_oc at or above 12.54 V, the charger may be on, so it starts in "charging".
+- (S1) No battery reading for 60 s (USB power while flashing, button off) ends the stretch like a power off.
 
 **One slice per stretch.** Start = the first anchor of the stretch (a full anchor if it began from a full charge). End = the anchor that gives the smallest relative error, usually the latest. Slice values: energy E between the two anchors, x = SOE_start - SOE_end, and their uncertainties.
 
@@ -360,9 +365,12 @@ Weighted total least squares, as in Plett 2011. Each slice says "E watt-hours mo
 
   J(C) = sum over slices of (E_i - C x_i / 100)^2 / (sigma_E,i^2 + (C / 100)^2 sigma_x,i^2)
 
-- Solved by a golden-section search for C between 20% and 160% of 26.6 Wh (a one-number search; at most 32 slices, so it costs nothing on the ESP32).
-- Uncertainty from the curvature of J at the best C, sigma_C^2 = 2 / J''(C). If the slices disagree more than their sigmas allow (J per degree of freedom above 1), sigma_C is scaled up by that amount. Then a floor of 3 points (PLACEHOLDER, for the generic table's shape) is added in quadrature.
-- Outliers: a slice whose normalized residual is over 3 is dropped from the fit and logged as an outlier, then the fit runs again once.
+- Solved by a golden-section search for C between 20% and 160% of 26.6 Wh (a one-number search; at most 32 slices, so it costs nothing on the ESP32). (S1) A coarse scan comes first and the search refines its best dip, because J can have two dips when slices disagree.
+- Uncertainty from the curvature of J at the best C, sigma_C^2 = 2 / J''(C). If the slices disagree more than their sigmas allow (J per degree of freedom above 1), sigma_C is scaled up by the square root of that. Then a floor of 3 points (PLACEHOLDER, for the generic table's shape) is added in quadrature.
+- (S1) **Errors that repeat do not average away.** The INA219 gain (2%) and the voltage table at an anchor are the same in every slice: same pack, same curve. So the plus-or-minus never drops below what the best single slice allows from those two parts. Found in testing: six identical short slices on the simulated pack were all 10 points low, and without this rule the fit claimed plus or minus 4. With it, plus or minus 8.5. What tightens the estimate is a deeper slice, not more of the same.
+- Outliers: a slice whose normalized residual is over 3 is dropped from the fit and logged as an outlier, then the fit runs again once. (S1) Needs at least 3 slices; with 2 there is no telling which one is wrong.
+- (S1) **A real pack change.** If 3 slices in a row are outliers on the same side, the pack itself changed (a failing cell, say): the older slices are cleared and those 3 kept, logged as "pack changed". Without this, a sudden real drop would be rejected forever.
+- Live: the open slice joins the fit once it passes the checks in 14.5 (refit at most every 30 s), so the number improves during a discharge. It is judged for outliers only when it closes.
 - Memory: the last 32 accepted slices. Older ones drop out, so the score follows the pack as it ages.
 - SOH = C / 26.6 x 100, sigma_SOH = sigma_C / 26.6 x 100.
 - Confidence: **none** (no accepted slice yet), **low** (sigma above 6 points), **high** (sigma 6 points or less).
@@ -370,17 +378,21 @@ Weighted total least squares, as in Plett 2011. Each slice says "E watt-hours mo
 
 ### 14.8 Expected accuracy
 
-From this table and the uncertainties above, for a pack at 94% SOH (one slice, then three similar slices):
+(S1) Measured on the simulated pack in the PC tests (SYNTHETIC, `npm run test:firmware -- -v`), not on the real pack. The simulated pack is at 94% SOH, its curve sits up to 8 mV per cell off the table, and its resistance is 0.30 ohm against the firmware's 0.25. One slice from a full charge down to each level, then three alike:
 
-| Use since a full charge | About | One slice | Three slices |
-|---|---|---|---|
-| Down to 91% | 2 hours | plus or minus 24 | plus or minus 14 |
-| Down to 85% | 3 hours | 14 | 8 |
-| Down to 70% | 6 hours | 8 | 5 |
-| Down to 30% | 15 hours | 6 | 4 |
-| Down to 10% | 19 hours | 4 | 3.5 |
+| Use since a full charge | About | One slice | Its error | Three alike | Their error |
+|---|---|---|---|---|---|
+| Down to 91% | 2 hours | plus or minus 19 | -18 | 19.5 | -16 |
+| Down to 85% | 3 hours | 11 | -13 | 11 | -11 |
+| Down to 70% | 6 hours | 7.5 | -8.5 | 7.6 | -6.6 |
+| Down to 30% | 15 hours | 6 | -5 | 6 | -1 |
+| Down to 10% | 19 hours | 4.7 | -1 | 4.7 | 0 |
 
-These are the random parts only. If the real pack's curve differs from the generic table more than 15 mV per cell, the true error is larger; the disagreement test in 14.7 widens the plus-or-minus when that shows up.
+- Every error stays within about 1.2 times its plus-or-minus. They are all low because the simulated pack's extra resistance and lower curve make every end point read a little emptier than it is.
+- Three alike are no better than one, on purpose (14.7). A deeper slice is what helps.
+- A discharge to 30% often ends its slice earlier, near 60%, because the table is weak in the flat middle (14.6).
+- The design estimate this replaces said plus or minus 14, 8, 5, 4 and 3.5 for three slices. It counted every error as random, which they are not.
+- If the real pack's curve differs from the table by more than 15 mV per cell, the true error is larger. The disagreement test in 14.7 widens the plus-or-minus only when slices disagree with each other.
 
 ### 14.9 Cycles
 
@@ -393,11 +405,11 @@ Each blob starts with a version byte and ends with a CRC32, so an old or corrupt
 | Key | Holds | Written |
 |---|---|---|
 | `remWh` (exists) | energy left for the existing estimate | unchanged |
-| `sohState` | fit result (C, sigma), cycle Wh, the last slice result and whether it reached Firebase | when a slice closes; otherwise at most every 5 min, only if cycle Wh moved by 0.05 Wh or more |
-| `sohSlices` | the last 32 accepted slices (E, x, sigma_E, sigma_x, about 600 bytes) | when a slice closes |
-| `sohOpen` | the open slice: start anchor, Wh and Ah so far, temperature sum, gap seconds, lowest V_oc, best end anchor | at most every 5 min during a stretch; removed when it closes |
+| `sohState` | cycle Wh, recent outliers (for the pack-change rule), the last slice result and whether it reached Firebase. (S1) The fit is not stored: it is recomputed from `sohSlices` at start. About 57 bytes. | when a slice closes or its log record is sent; otherwise at most every 30 min (S1, was 5), only if cycle Wh moved by 0.05 Wh or more |
+| `sohSlices` | the last 32 accepted slices (E, x, sigma_E, sigma_x, start kind): 550 bytes when full | when a slice closes |
+| `sohOpen` | the open slice: start anchor and best end anchor, each with its energy, Ah, time, gap and temperature totals; why anchors were refused. About 140 bytes. | as soon as the start anchor is found, then at most every 5 min; removed when it closes |
 
-Flash wear: at most about 300 small writes a day, the same rate the firmware already uses for `remWh`.
+Flash wear: (S1) about 340 small writes a day for battery health, on top of the 288 for `remWh`. The NVS layer spreads writes over its pages, so this stays far below the flash's rated erase cycles.
 
 ### 14.11 Serial commands
 
@@ -421,11 +433,19 @@ Flash wear: at most about 300 small writes a day, the same rate the firmware alr
 | `battCapWhEst` | Wh or null | Fitted usable energy |
 | `battCycles` | number | Equivalent full cycles |
 | `battSohSlices` | count | Slices in the fit |
-| `battSohProgressPct` | 0 to 100 | Progress of the open slice toward being usable; 100 once usable |
+| `battSohProgressPct` | 0 to 100 | Progress of the open slice toward being usable; 100 once usable. (S1) The first half fills during the 60 min settle time (finding a start point), the second half as the slice grows to 2 points and 0.2 Wh. |
 | `battSohLearn` | "waiting", "discharging", "charging" | What the learner sees now |
 | `inaCal` | bool | False while the INA219 gain and offset are placeholders |
 
 `/station/healthLog/<pushId>`, one record per closed slice (about 190 bytes): `ts`, `ok` (bool), `why` (reason when rejected or an outlier), `start` ("full" or "rest"), `e` (Wh), `ah`, `x` (SOE points), `sx` (its sigma), `sliceSohPct` (this slice alone: E / x scaled to SOH), `fitSohPct` and `fitSigmaPct` (the fit after this slice; null after a `z` reset), `tempC` (mean), `hours`.
+
+(S1) Details:
+
+- `why` is one of: "too small", "gaps in the data", "no temperature", "too cold", "too hot", "outlier", "no start point: <check>", "no end point: <check>" (the anchor check that failed most, for example "current not steady"). On an accepted slice it is usually null, or "an older outlier slice was dropped" or "pack changed: older slices cleared".
+- A stretch that never found a start point is logged only if it ran past the 60 min settle time, so restarts while flashing do not fill the log.
+- A `z` reset appends one record with `why` "reset" and every value null. The chart breaks its line there.
+- `ts` is the server time when the record reached Firebase. A record that waited for WiFi keeps its values but gets the later time. Only the newest record waits; an older unsent one is replaced.
+- Measured sizes: a health node 206 bytes, a log record about 180 to 230 bytes with its key.
 
 Read rules (section 5, approved with O9): `health` public, `healthLog` only through a `ts`-ordered query of at most 500 records.
 
@@ -437,7 +457,7 @@ Read rules (section 5, approved with O9): `health` public, `healthLog` only thro
 | One open tab, per day | 18 MB | plus at most 0.33 MB (usually about 0.04) |
 | 24 h history load | 3.8 MB | same; the health log fetch is under 100 KB |
 
-Measured: a health node is 227 bytes, a health log record about 190 bytes with its key. For comparison, the six fields in every record (the brief's layout) would have added 121 bytes per record: 4.9 MB/day of history and 23 MB/day per open tab.
+Measured: a health node is about 206 to 227 bytes, a health log record about 180 to 230 bytes with its key. For comparison, the six fields in every record (the brief's layout) would have added 121 bytes per record: 4.9 MB/day of history and 23 MB/day per open tab.
 
 ### 14.14 Website
 
@@ -464,14 +484,15 @@ Colors (O12, approved), never by color alone (the band name is in the panel and 
 
 ### 14.15 Tests
 
-- **Firmware logic on the PC:** `soh.h` is plain C++ with no Arduino headers. `tests/firmware/soh_test.cpp` compiles it with the system compiler (`npm run test:firmware`, also in CI). Synthetic discharge curves in `tests/fixtures/soh/`, generated by a script from a simulated pack with a known true capacity and labeled SYNTHETIC in every file. Cases:
+- **Firmware logic on the PC:** `soh.h` is plain C++ with no Arduino headers. `tests/firmware/soh_test.cpp` compiles it with the system compiler, warnings as errors (`npm run test:firmware`, also in CI). (S1) The discharge curves are not stored files: `tests/firmware/pack_sim.h`, a simulated 3S pack with a known true SOH, a CC/CV charger and the station's load, makes them while the tests run. It is labeled SYNTHETIC, and there is nothing that could be mistaken for data. Cases (137 checks, all passing):
   - a full discharge recovers the true SOH within its plus-or-minus;
-  - short slices give a wide plus-or-minus that shrinks as slices are added;
+  - short slices give a wide plus-or-minus; repeating them does not shrink it, and a deep discharge afterwards does (S1, see 14.7);
   - rejections: too cold, too hot, no temperature, too small, unstable current (no anchors), gaps;
   - charger plugged in mid-stretch closes the slice at the last good anchor;
   - reboot mid-stretch closes the slice at the saved anchor;
-  - an outlier slice is dropped; the fit follows when the true capacity drops (aging);
-  - persistence round trip, and a corrupt blob resets.
+  - an outlier slice is dropped; the fit follows when the true capacity drops (aging), and when it drops suddenly (pack change);
+  - persistence round trip, and a corrupt, cut-short, missing or wrong-version blob resets;
+  - (S1) starting while on the charger; a partial charge is not a full anchor; a lost battery reading; the JSON for both nodes; the `h` report; the accuracy table in 14.8.
 - **Firmware build:** `arduino-cli compile` stays clean (no new warnings).
 - **Website unit tests:** band and pill text for every state.
 - **Playwright:** pill in each state (none, low, high, null, offline); panel opens and closes (click, Escape); health chart renders with a gap; no console errors. Fixtures labeled as before.
@@ -513,7 +534,7 @@ One local commit per step, after Cole approves this section.
 
 | Step | Work | Acceptance |
 |---|---|---|
-| S1 | `soh.h` pure logic, synthetic curve generator, C++ tests | All firmware tests pass on the PC |
+| S1 | `soh.h` pure logic, synthetic curve generator, C++ tests | All firmware tests pass on the PC. Done 2026-11-01: 137 checks pass with clang and GCC, and `soh.h` compiles for the ESP32 with all warnings on and none reported. |
 | S2 | Firmware: INA219 averaging, SOH wiring, persistence, `h` and `z`, health uploads, version 1.1 | Compiles with no new warnings; secret scan passes |
 | S3 | Website: data source, pill and panel, health chart tab, fixtures | Unit and Playwright tests pass at both sizes, no console errors |
 | S4 | Docs: README, firmware README, this section marked built; final report | Report lists what was verified, what was not, and the accuracy limits |
