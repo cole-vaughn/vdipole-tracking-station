@@ -49,7 +49,7 @@ and regenerate the ThingSpeak write key.
 | BLOCK_R | 12 | HIGH blocks the RF channel. **Strapping pin**: nothing may pull it HIGH at boot |
 | Cap drive | 4 | Square wave out, through the 0.97 MOhm resistor |
 | Cap comparator | 16 | LM339 output in, 10k pull-up to 3.3 V on the board |
-| Fan tach | 19 | **New.** Yellow tach wire. Needs a 10k pull-up to 3.3 V (see below) |
+| Fan tach | 18 | **New.** Tach wire (dashed on this fan) through a 10k series resistor; 10k pull-up to 3.3 V on the fan side (see below) |
 | LCD RS, E, D4 to D7 | 27, 26, 25, 33, 14, 13 | 4-bit mode |
 
 ## Before connecting the fan tach wire (do this first)
@@ -60,9 +60,27 @@ otherwise floats. Some fans, or a board with its own pull-up, can put 12 V on th
 1. Power the fan from 12 V with the tach wire **not** connected to anything.
 2. Measure tach to ground with a multimeter. Expect about 0 V or a floating reading. If it reads anywhere near 12 V,
    stop: put a level shifter or a divider in between.
-3. Only then connect it to GPIO19 with a 10k resistor from GPIO19 to 3.3 V. The firmware also enables the internal pull-up,
-   which is not strong enough on its own for a clean edge.
+3. Only then wire it to GPIO18 like this:
+
+   ```
+   fan tach wire ---+--- 10k series ---> GPIO18
+                    |
+                   10k pull-up
+                    |
+                  3.3 V
+   ```
+
+   - The tach wire goes to a node. The node has a 10k pull-up to 3.3 V and a 10k series resistor to GPIO18.
+   - The pull-up must be on the **fan side** of the series resistor, not at the GPIO. If it were at the GPIO, the two
+     resistors would form a divider and a low would read about 1.6 V, which the ESP32 may not see as low.
+   - The series resistor limits the current into the pin to under 1 mA if the tach wire ever went to 12 V.
+   - The firmware sets the pin to plain `INPUT`. The external pull-up does the work. The ESP32's internal pull-up (about
+     45k) would also sit on the GPIO side and lift a low to about 0.6 V, close to the 0.8 V limit for a low, so it is off.
 4. Until the tach wire is connected, set `FAN_ENABLED` to `0` in the sketch. Otherwise the firmware reports 0 RPM and "stalled".
+
+**Safety check done (Cole, 2026-10-31).** The tach (the dashed wire on this fan) was connected through a 10k resistor to
+a GPIO set to `INPUT_PULLDOWN`. With the fan running it read HIGH 0 of 400 samples, and 400 of 400 when the resistor was
+touched to 3.3 V. So the tach never drives the line high by itself: it is open collector and safe for 3.3 V logic.
 
 ## Behaviour summary
 

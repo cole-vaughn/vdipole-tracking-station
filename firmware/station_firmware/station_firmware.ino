@@ -80,7 +80,7 @@ struct Telemetry {
 #define BLOCK_R_PIN    12   // HIGH turns the RF shunt transistor on, blocking that channel. Strapping pin: nothing may pull it HIGH at boot.
 #define CAP_DRIVE_PIN  4    // square wave out, through R16 to the sensor
 #define CAP_COMP_PIN   16   // LM339 output in, 10k pull-up to 3.3 V on the board.
-#define TACH_PIN       19   // fan tach wire (yellow). NEW. Needs a 10k pull-up to 3.3 V, see README.
+#define TACH_PIN       18   // fan tach wire, through a 10k series resistor. 10k pull-up to 3.3 V on the fan side, see README.
 // LCD (4-bit): RS 27, E 26, D4 25, D5 33, D6 14, D7 13
 
 #define ADC_MAX_COUNT 4095.0
@@ -1003,9 +1003,10 @@ void setup() {
   }
   batteryInit();
 
-  // Fan tach: open-collector output, pulled up to 3.3 V, one falling edge per pulse.
+  // Fan tach: open-collector output, one falling edge per pulse. The external 10k pull-up sits on the fan side of the
+  // 10k series resistor. No internal pull-up: it would sit on the GPIO side and lift a low to about 0.6 V.
   if (FAN_ENABLED) {
-    pinMode(TACH_PIN, INPUT_PULLUP);
+    pinMode(TACH_PIN, INPUT);
     attachInterrupt(digitalPinToInterrupt(TACH_PIN), tachISR, FALLING);
   }
 

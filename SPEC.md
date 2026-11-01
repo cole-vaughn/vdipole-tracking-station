@@ -67,7 +67,7 @@ So the site must handle null, missing and unverified data from day one.
 | Touch pad | touched, count since boot, delay, delta, fault flag. Thresholds need re-tuning after final assembly. |
 | INA219 | Voltage, current and power on the 12 V line, between the button and the buck converter. It measures what the system draws. |
 | Battery estimate | An estimate. Derating 0.90 and internal resistance 0.25 ohm are placeholders. Always shown with "~". |
-| Fan | RPM from the tach, 2 pulses per turn. Not wired yet, so RPM is null. RPM also falls as battery voltage falls. |
+| Fan | RPM from the tach on GPIO18 (10k series resistor, 10k pull-up to 3.3 V on the fan side; see the firmware README), 2 pulses per turn. Tach safety check passed 2026-10-31 (open collector). Being wired, so RPM is null until then. RPM also falls as battery voltage falls. |
 | ESP32 | WiFi RSSI and uptime. |
 
 ## 4. Repo, naming and hosting
@@ -226,7 +226,7 @@ Definition of done: all milestones complete, all tests pass and shown to Cole, n
 | O3 | Decided: Firebase JS SDK from a pinned CDN (server clock offset via `.info/serverTimeOffset`, built-in reconnect). | Done |
 | O4 | Logged charge test for the charging inference (section 7, F2). | Cole |
 | O5 | Compile and flash the firmware, run the README checklist. | Cole |
-| O6 | Bench check: thermistor vs BMP388, BMP388 health, fan tach (meter check first). | Cole |
+| O6 | Bench check: thermistor vs BMP388, BMP388 health, fan RPM once wired to GPIO18 (the tach safety check passed 2026-10-31). | Cole |
 | O7 | Firmware changes the agent wants to ask for (none made yet): rename user-visible old-name strings (splash text, version string, flash namespace), charge-aware battery estimate, slimmer history records, TLS pinning. | Cole decides |
 | O8 | Take down v1 after v2 is live. Consider exporting ThingSpeak data first. | Cole |
 | O9 | Decided: separate `/station/health` and `/station/healthLog` nodes, with their two read rules (section 5). | Done |
