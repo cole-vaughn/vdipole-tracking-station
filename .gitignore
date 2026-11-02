@@ -21,3 +21,9 @@ site/data/passes.json
 
 # Course checkpoint drafts and class documents: kept on this computer only, never published.
 checkpoints/
+
+# Local editor settings (LaTeX preview with Tectonic)
+.vscode/
+
+# KiCad projects: kept on this computer only until Cole decides to publish them.
+schematics/
