@@ -25,8 +25,9 @@ test("loads with no console errors and shows the fixture label", async ({ page }
   await open(page, "");
   await expect(page.locator("#fixture-label")).toContainText("TEST FIXTURE DATA");
   await expect(page.locator("body")).toHaveAttribute("data-station", "live");
-  await expect(page.locator("h1")).toHaveText("Satellite V-Dipole Tracking Station");
-  // Give the lazy globe and the orbit module time to start, then check the console.
+  await expect(page.locator("h1")).toHaveText("V-Dipole Tracking Station");
+  await expect(page).toHaveTitle("V-Dipole Tracking Station");
+  // Give the lazy 3D view time to start, then check the console.
   await page.waitForTimeout(6000);
   expect(info.consoleProblems).toEqual([]);
 });
@@ -47,9 +48,9 @@ test("old data shows OFFLINE banner, fresh data clears it", async ({ page }) => 
 test("age counter ticks without new data and goes OFFLINE by itself", async ({ page }) => {
   await page.clock.install(); // before load, so the page's 1 s ticker runs on the controlled clock
   await open(page);
-  await latest(page, {}, { ageMs: 28_000 });
+  await latest(page, {}, { ageMs: 20_000 });   // 10 s from OFFLINE, so a slow start (the 3D view) cannot skip "delayed"
   await expect(page.locator("body")).toHaveAttribute("data-station", "delayed");
-  await page.clock.runFor(4000);
+  await page.clock.runFor(12_000);
   await expect(page.locator("body")).toHaveAttribute("data-station", "offline");
 });
 
@@ -121,13 +122,24 @@ test("temperature unit toggle switches to Fahrenheit", async ({ page }) => {
   await expect(page.locator(".temp-unit").first()).toHaveText("°F");
 });
 
-test("satellite readouts and the globe canvas appear", async ({ page }) => {
+test("3D radio link: the scene renders and the tower stands at the station's estimate", async ({ page }) => {
   await open(page);
-  await expect(page.locator("#sat-el")).toHaveText(/-?\d+\.\d°/);
-  await expect(page.locator("#sat-next")).not.toHaveText("--");
-  await expect(page.locator("#pass-rows tr")).toHaveCount(5);
-  await expect(page.locator("#pass-rows tr").first()).toContainText(/\d\d:\d\d/);
-  await expect(page.locator("#globe canvas")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("#scene canvas")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("#scene-msg")).toBeHidden();
+  await latest(page, scored({ rqsTag: "GROUND", rqsPass: null, distM: 6.4, distLoM: 4.9, distHiM: 8.3, distCal: 3, distN: 2.3,
+    rfFiltDbm: -45, rfBaselineDbm: -57.9, rfExcessDb: 12.9 }));
+  await expect(page.locator("#link-dist")).toHaveText("≈ 6.4 m");
+  await expect(page.locator("#link-range")).toHaveText("4.9 m to 8.3 m");
+  await expect(page.locator("#link-cal")).toHaveText("3 points, n = 2.3");
+  await expect(page.locator("#link-state")).toHaveText("SIGNAL");
+  await expect(page.locator(".lbl-dist")).toHaveText("≈ 6.4 m");
+  await page.waitForFunction(() => document.querySelector(".lbl-tower")?.textContent === "Tower (NanoVNA)");
+  // No estimate: the tower is shown faded, never at a made-up distance.
+  await latest(page, scored({ rqsTag: "GROUND", distM: null, distLoM: null, distHiM: null, distCal: 0, rfDetected: false, rfExcessDb: 0.3 }));
+  await expect(page.locator("#link-dist")).toHaveText("not calibrated");
+  await expect(page.locator("#link-state")).toHaveText("QUIET");
+  await page.waitForFunction(() => document.querySelector(".lbl-tower")?.textContent === "Tower (no estimate)");
+  await page.locator("#reset-btn").click();
 });
 
 test("no horizontal scroll", async ({ page }) => {
@@ -138,7 +150,7 @@ test("no horizontal scroll", async ({ page }) => {
 
 test("screenshots for review @screens", async ({ page }, info) => {
   await open(page, ""); // autoplay on, so the status reads LIVE
-  await page.waitForTimeout(8000); // globe imagery
+  await page.waitForTimeout(4000); // the 3D view
   await page.screenshot({ path: `tests/screenshots/${info.project.name}.png`, fullPage: true });
   await page.screenshot({ path: `tests/screenshots/${info.project.name}-first-view.png` });
 });
@@ -162,9 +174,9 @@ test("RQS hero: every label, tag and flag", async ({ page }) => {
   await expect(page.locator("#rqs-tag")).toHaveText("PASS");
   await expect(page.locator("#rqs-tagwords")).toHaveText("in a predicted pass");
   await expect(page.locator("#rqs-bar-snr")).toHaveText("0.52");
-  await expect(page.locator("#rqs-bar-pass")).toHaveText("0.93");
-  await expect(page.locator("#rqs-el")).toHaveText("42°");
-  await expect(page.locator("#rqs-corr")).toHaveText("0.83");
+  await expect(page.locator("#rqs-bar-pass")).toHaveText("0.93");          // satellite mode shows the pass part
+  await expect(page.locator("#rqs-mode")).toHaveText("Satellite");
+  await expect(page.locator("#rqs-excess")).toHaveText("+6.2 dB");
   await expect(page.locator("#rqs-detected")).toBeVisible();
   await expect(page.locator("#rqs-temp-na")).toBeHidden();
   await expect(page.locator("#rf-excess")).toHaveText("+6.2");     // the S-meter follows the station's excess
@@ -176,7 +188,6 @@ test("RQS hero: every label, tag and flag", async ({ page }) => {
     await expect(page.locator("#rqs-label")).toHaveText(label);
     await expect(panel).toHaveAttribute("data-band", band);
     await expect(page.locator("#rqs-tag")).toHaveText(tag);
-    await expect(page.locator("#rqs-el")).toHaveText("not in a pass");
   }
 
   await latest(page, scored({ rqsTempC: null, battSocPct: null }));
@@ -191,6 +202,12 @@ test("RQS hero: every label, tag and flag", async ({ page }) => {
   await expect(page.locator("#rqs-bar-health")).toHaveText("--");
   await expect(page.locator("#rf-base")).toHaveText("learning");
   await expect(page.locator("#rf-excess")).toHaveText("--");
+  // Ground mode: three bars, the distance, no pass part.
+  await latest(page, scored({ rqsTag: "GROUND", rqsPass: null, distM: 3.21, distLoM: 2.5, distHiM: 4.12, distCal: 3 }));
+  await expect(page.locator('#rqs-bars [data-bar="pass"]')).toBeHidden();
+  await expect(page.locator("#rqs-mode")).toHaveText("Ground station");
+  await expect(page.locator("#rqs-dist")).toHaveText("≈ 3.2 m (2.5 to 4.1)");
+  await expect(page.locator("#rf-dist")).toHaveText("≈ 3.2 m");
 
   // A record from firmware before 1.2 has no RQS fields at all.
   await latest(page, { rfFiltDbm: -75, rfRawDbm: -75.4, battSocPct: 60 }, { replace: true });
@@ -243,9 +260,9 @@ test("RQS sparkline, radio overlays, score chart and detection log", async ({ pa
   const r = await rf.jsonValue();
   expect(r.base).toBeGreaterThan(100);
   expect(r.thr).toBeGreaterThan(100);
-  expect(r.pass).toBeGreaterThanOrEqual(3);   // the made-up passes in the last 24 h
-  expect(r.det).toBeGreaterThanOrEqual(3);    // three heard passes and one interference burst
-  expect(r.labels).toEqual(["Raw", "Filtered", "Baseline", "Threshold", "Pass window", "Detection"]);
+  expect(r.pass).toBe(0);                     // ground mode: no satellite passes
+  expect(r.det).toBeGreaterThanOrEqual(3);    // the made-up tower sessions (the 1, 5, 10 m walk is one run)
+  expect(r.labels).toEqual(["Raw", "Filtered", "Baseline", "Threshold", "Detection"]);
   const q = await page.waitForFunction(() => {
     const c = window.Chart?.getChart(document.querySelector('[data-chart="rqs"] canvas'));
     return c && c.data.datasets[0].data.length > 100 ? { max: c.options.scales.y.max, min: c.options.scales.y.min } : null;
@@ -254,10 +271,15 @@ test("RQS sparkline, radio overlays, score chart and detection log", async ({ pa
   const rows = page.locator("#det-rows tr");
   await expect(rows.first()).not.toContainText("No detections");
   expect(await rows.count()).toBeGreaterThanOrEqual(3);
-  await expect(page.locator("#det-rows")).toContainText("yes");
-  await expect(page.locator("#det-rows")).toContainText("no");   // the burst outside any pass
+  await expect(page.locator("#det-rows")).toContainText("≈ 15 m");   // the 15 m session
+  await expect(page.locator("#det-rows")).toContainText(/≈ 3\.\d m/);  // the session in progress (median of noisy estimates)
+  const dist = await page.waitForFunction(() => {
+    const c = window.Chart?.getChart(document.querySelector('[data-chart="dist"] canvas'));
+    return c && c.data.datasets[0].data.filter((p) => p.y !== null).length > 50 ? c.data.datasets.length : null;
+  });
+  expect(await dist.jsonValue()).toBe(3);
   await page.locator('[data-range="15m"]').click();
-  await expect(page.locator("#det-rows")).toContainText(/ongoing|yes/);   // the pass in progress
+  await expect(page.locator("#det-rows")).toContainText("ongoing");   // the tower session in progress
   expect(info.consoleProblems).toEqual([]);
 });
 

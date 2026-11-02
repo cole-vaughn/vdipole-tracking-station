@@ -1,6 +1,6 @@
 // Graphs section: history query per range, live points appended at the right edge, gaps for null.
 // Charts are only built for the visible tab, so the page stays light.
-// The Radio tab also shades pass windows and detections and lists detections (SPEC 14.14), all from history.
+// The Radio tab also shades detections, charts the distance estimate and lists detections (SPEC 16.3), all from history.
 import { fmt, fmtClock, toUnit, isNum, dayLabel } from "../lib/format.js";
 import { downsample, insertGaps, pickSeries } from "../lib/series.js";
 import { detectionLog, spans, RQS_LINES } from "../lib/rqs.js";
@@ -24,6 +24,9 @@ const GROUPS = [
     ] },
     { id: "rqs", title: "Reception quality score", unit: "score", digits: 1, yMin: 0, yMax: 100, guides: true, shade: true,
       note: "Faint lines at 15, 40 and 70", series: [{ field: "rqs", label: "RQS", color: C.good }] },
+    { id: "dist", title: "Distance to the tower (estimate)", unit: "m", digits: 1, yMin: 0, note: "From signal strength, with its likely range",
+      series: [{ field: "distM", label: "Estimate", color: C.accent },
+        { field: "distLoM", label: "Low", color: C.muted, dash: [3, 3], width: 1 }, { field: "distHiM", label: "High", color: C.muted, dash: [3, 3], width: 1 }] },
   ] },
   { id: "power", label: "Power", charts: [
     { id: "batt-v", title: "Battery voltage", unit: "V", digits: 2, series: [{ field: "battV", label: "Voltage", color: C.good }] },
@@ -46,10 +49,10 @@ const DETECTIONS_CARD =
   `<figure class="chart-card wide-card" data-card="detections"><figcaption><span>Detection log</span>` +
   `<span class="note" data-note></span></figcaption><div class="det-wrap"><table class="det-table">` +
   `<thead><tr><th scope="col">Start</th><th scope="col">Length</th><th scope="col">Peak excess</th>` +
-  `<th scope="col">Peak RQS</th><th scope="col">In a pass</th></tr></thead><tbody id="det-rows"></tbody></table></div>` +
+  `<th scope="col">Peak RQS</th><th scope="col">Distance</th></tr></thead><tbody id="det-rows"></tbody></table></div>` +
   `<p class="note">From the station's history in the chosen range. A detection shorter than the 10 s history step can be missed.</p></figure>`;
 
-// Shaded spans behind the lines: predicted pass windows and detections (chart.$spans, set on each redraw).
+// Shaded spans behind the lines: detections, and predicted pass windows in satellite mode (chart.$spans, set on each redraw).
 const shading = {
   id: "shading",
   beforeDatasetsDraw(chart) {
@@ -310,7 +313,7 @@ export function createGraphs({ config, now, getUnit, onError, onLoad }) {
         durationText(d.durationS, d.ongoing),
         isNum(d.peakExcess) ? `${d.peakExcess >= 0 ? "+" : ""}${d.peakExcess.toFixed(1)} dB` : "--",
         fmt(d.peakRqs, 0),
-        d.inPass ? "yes" : "no",
+        isNum(d.distM) ? `≈ ${d.distM < 10 ? d.distM.toFixed(1) : Math.round(d.distM)} m` : "--",
       ];
       for (const text of cells) { const td = document.createElement("td"); td.textContent = text; tr.append(td); }
       return tr;
@@ -333,8 +336,7 @@ export function createGraphs({ config, now, getUnit, onError, onLoad }) {
           borderWidth: s.width ?? 1.6, borderDash: s.dash ?? [], pointRadius: 0, pointHoverRadius: 3.5,
           pointHoverBorderWidth: 0, spanGaps: false, tension: 0,
         })).concat(c.shade ? [
-          // Legend entries for the shading; they hold no data.
-          { label: "Pass window", data: [], backgroundColor: SHADE.pass, borderColor: "transparent", borderWidth: 0 },
+          // Legend entry for the shading; it holds no data. (Pass windows only appear in satellite mode.)
           { label: "Detection", data: [], backgroundColor: SHADE.det, borderColor: "transparent", borderWidth: 0 },
         ] : []),
       },

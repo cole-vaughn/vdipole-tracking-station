@@ -1,7 +1,7 @@
 // Instrument cards: battery, RF meter, fan, touch, environment. Each one renders "--" for null.
 import { fmt, fmtInt, fmtHoursLeft, fmtTemp, fmtClock, isNum } from "../lib/format.js";
 import { batteryBand, isLowBattery } from "../lib/battery.js";
-import { rfLevel } from "../lib/rqs.js";
+import { rfLevel, distanceView } from "../lib/rqs.js";
 
 const $ = (id) => document.getElementById(id);
 export function setText(id, text) {
@@ -62,7 +62,7 @@ export function renderBattery(rec, cfg, { stationOffline, charge, chargingCfg })
 }
 
 // Level and baseline come from the station (rfExcessDb, rfBaselineDbm; SPEC F4 and 14.5), never from the browser.
-export function renderRf(rec, cfg, satElDeg) {
+export function renderRf(rec, cfg) {
   const dbm = rec?.rfFiltDbm;
   const base = rec?.rfBaselineDbm;
   const excess = rec?.rfExcessDb;
@@ -73,7 +73,7 @@ export function renderRf(rec, cfg, satElDeg) {
   setText("rf-excess", isNum(excess) ? (excess >= 0 ? "+" : "") + excess.toFixed(1) : "--");
   setText("rf-dbm", fmt(dbm, 1));
   setText("rf-base", isNum(base) ? `${base.toFixed(1)} dBm` : rec?.rqsLabel === "WARMING UP" ? "learning" : "--");
-  setText("rf-el", isNum(satElDeg) ? `${satElDeg.toFixed(0)}°, ${satElDeg > 0 ? "up" : "down"}` : "--");
+  setText("rf-dist", distanceView(rec).text);
   return level;
 }
 

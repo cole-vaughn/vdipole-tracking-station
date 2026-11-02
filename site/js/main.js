@@ -1,5 +1,5 @@
 // Wires the data source to the page. Nothing here invents data: every value shown comes from the
-// station (through the source) or from the public orbit file.
+// station (through the source).
 import { CONFIG } from "./config.js";
 import { createSource } from "./source.js";
 import { freshness } from "./lib/freshness.js";
@@ -10,7 +10,7 @@ import {
 } from "./ui/cards.js";
 import { createGraphs } from "./ui/graphs.js";
 import { initRqs, renderRqs } from "./ui/rqs.js";
-import { startSatellite } from "./ui/satellite.js";
+import { rfLevel, bandFor, distanceView, signalPowerDbm, isGround } from "./lib/rqs.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -25,8 +25,7 @@ const app = {
   unit: loadUnit(),
   readError: null,
   lastError: null,
-  sat: null,
-  globe: null,
+  scene: null,
   charge: null,
   rfLevel: 0,
 };
@@ -102,7 +101,7 @@ function tick() {
   setText("d-age", f.ageMs === null ? "--" : `${(f.ageMs / 1000).toFixed(1)} s`);
   setText("d-offset", `${Math.round(app.offsetMs)} ms`);
   setText("d-fw", app.meta?.fw ?? "--");
-  setText("d-tle", app.sat?.available ? fmtAge(app.sat.tleAgeMs) : "unavailable");
+  setText("d-mode", app.meta?.mode ?? (app.latest?.rqsTag ? (isGround(app.latest) ? "ground" : "satellite") : "--"));
   const L = app.latest;
   setText("d-rf", isNum(L?.rfBaselineDbm)
     ? `${L.rfBaselineDbm.toFixed(1)} dBm, spread ${isNum(L.rfSigmaDb) ? L.rfSigmaDb.toFixed(2) : "--"} dB`
@@ -122,10 +121,38 @@ function renderAll() {
   const stationOffline = document.body.dataset.station === "offline";
   renderRqs(rec, { stationOffline, meta: app.meta, unit: app.unit, records: graphs.records, nowMs: now() });
   renderBattery(rec, CONFIG.battery, { stationOffline, charge: app.charge, chargingCfg: CONFIG.charging });
-  app.rfLevel = renderRf(rec, CONFIG.rf, app.sat?.available ? app.sat.pos.elDeg : null);
+  app.rfLevel = renderRf(rec, CONFIG.rf);
   renderFan(rec, CONFIG.fan);
   renderTouch(touchView(rec, app.touch));
   renderEnv(rec, app.unit);
+  renderLink(rec, stationOffline);
+}
+
+// The radio link readouts under the 3D view, and the scene itself.
+function lcdLines(rec) {
+  if (!rec) return ["V-Dipole Station", "waiting for data"];
+  const rf = isNum(rec.rfFiltDbm) ? rec.rfFiltDbm.toFixed(1) : "--";
+  const line1 = isNum(rec.rfExcessDb) ? `RF${rf.padStart(6)} ${rec.rfExcessDb >= 0 ? "+" : ""}${rec.rfExcessDb.toFixed(1)}dB` : `RF ${rf} dBm`;
+  const line2 = isNum(rec.rqs) ? `RQS ${Math.round(rec.rqs)} ${isNum(rec.distM) ? `~${rec.distM.toFixed(1)}m` : rec.rqsLabel ?? ""}` : "RQS warming up";
+  return [line1, line2];
+}
+
+function renderLink(rec, stationOffline) {
+  const d = distanceView(rec);
+  const sig = signalPowerDbm(rec);
+  setText("link-dist", d.text);
+  setText("link-range", d.range);
+  setText("link-signal", sig === null ? "--" : `${sig.toFixed(1)} dBm`);
+  setText("link-cal", !rec || !isNum(rec.distCal) ? "--"
+    : rec.distCal === 0 ? "not calibrated" : `${rec.distCal} point${rec.distCal === 1 ? "" : "s"}${isNum(rec.distN) ? `, n = ${rec.distN.toFixed(1)}` : ""}`);
+  const tag = $("link-state");
+  const on = rec?.rfDetected === true && !stationOffline;
+  tag.dataset.state = on ? "signal" : "quiet";
+  setText("link-state", !rec ? "--" : on ? "SIGNAL" : "QUIET");
+  app.scene?.update({
+    distM: d.m, distLoM: d.lo, distHiM: d.hi, level: rfLevel(rec, CONFIG.rf.fullScaleDb), detected: rec?.rfDetected === true,
+    band: bandFor(rec?.rqs), offline: stationOffline, lcd: lcdLines(rec),
+  });
 }
 
 function onLatest(rec) {
@@ -147,7 +174,6 @@ function onTouch(t) {
   renderTouch(touchView(app.latest, app.touch));
   if (pressed) {
     flashTouch();
-    app.globe?.ripple();
   }
 }
 
@@ -177,15 +203,8 @@ $("diag-toggle").addEventListener("click", (e) => {
   $("diagnostics").hidden = !open;
 });
 
-const followBtn = $("follow-btn");
-followBtn.addEventListener("click", () => {
-  const on = followBtn.getAttribute("aria-pressed") !== "true";
-  followBtn.setAttribute("aria-pressed", String(on));
-  app.globe?.setFollow(on);
-});
 $("reset-btn").addEventListener("click", () => {
-  followBtn.setAttribute("aria-pressed", "false");
-  app.globe?.reset();
+  app.scene?.reset();
 });
 
 // ---------- Start ----------
@@ -227,39 +246,25 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     hiddenAt = Date.now();
     app.source?.pause();
-    app.globe?.pause();
+    app.scene?.pause();
   } else {
     app.source?.resume();
-    app.globe?.resume();
+    app.scene?.resume();
     if (Date.now() - hiddenAt > 60e3) graphs.reload();
   }
 });
 
-startSatellite({
-  config: CONFIG,
-  now,
-  onError: noteError,
-  onUpdate(sat) {
-    app.sat = sat;
-    app.rfLevel = renderRf(app.latest, CONFIG.rf, sat.available ? sat.pos.elDeg : null);
-    app.globe?.update({ pos: sat.available ? sat.pos : null, tracker: sat.tracker, now: now(), rfLevel: app.rfLevel });
-  },
-});
-
-// The globe is the heaviest part, so it loads after the first paint.
-const globeMsg = $("globe-msg");
+// The 3D view is the heaviest part, so it loads after the first paint.
+const sceneMsg = $("scene-msg");
 setTimeout(async () => {
   try {
-    const { createGlobe } = await import("./ui/globe.js");
-    app.globe = await createGlobe($("globe"), { station: CONFIG.station, satName: CONFIG.satellites[0].name });
-    globeMsg.hidden = true;
+    const { createScene } = await import("./ui/scene.js");
+    app.scene = await createScene($("scene"), $("scene-labels"), { onError: noteError });
+    sceneMsg.hidden = true;
+    renderAll();
   } catch (err) {
-    globeMsg.textContent = `The 3D globe could not start (${err.message}). Satellite numbers below still work.`;
-    noteError(`Globe: ${err.message}`);
-  }
-  if (app.sat && !app.sat.available) {
-    globeMsg.hidden = false;
-    globeMsg.textContent = "Orbit data unavailable: showing the station only, never a guessed satellite position.";
+    sceneMsg.textContent = `The 3D view could not start (${err.message}). The numbers below still work.`;
+    noteError(`3D view: ${err.message}`);
   }
 }, 50);
 

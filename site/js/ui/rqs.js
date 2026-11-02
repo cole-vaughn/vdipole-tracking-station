@@ -1,7 +1,7 @@
-// The reception quality score instrument (SPEC 14.14): gauge, label and tag, four part bars, a 30 minute sparkline,
-// next pass, and the "Why this score?" panel. Text goes in with textContent only.
+// The reception quality score instrument (SPEC 14.14, 16.3): gauge, label and tag, the part bars (three in ground
+// mode), a 30 minute sparkline, distance, and the "Why this score?" panel. Text goes in with textContent only.
 import { rqsView, whyLines, sparkPoints, BANDS } from "../lib/rqs.js";
-import { fmtHm, fmtCountdown, isNum } from "../lib/format.js";
+import { isNum } from "../lib/format.js";
 import { setText } from "./cards.js";
 
 const $ = (id) => document.getElementById(id);
@@ -86,19 +86,17 @@ export function renderRqs(rec, { stationOffline = false, meta = null, unit = "C"
     const li = document.querySelector(`#rqs-bars [data-bar="${b.id}"]`);
     li.querySelector("i").style.setProperty("--v", b.value === null ? "0" : b.value.toFixed(3));
     li.dataset.empty = String(b.value === null);
+    li.hidden = b.hidden === true;
     setText(`rqs-bar-${b.id}`, b.value === null ? "--" : b.value.toFixed(2));
   }
 
   const windowMs = 30 * 60e3;
   $("rqs-spark-line").setAttribute("d", sparkPath(sparkPoints(records, nowMs, windowMs), nowMs, windowMs));
 
-  if (isNum(v.nextPassMs) && v.nextPassMs > nowMs) {
-    setText("rqs-next", `${fmtHm(new Date(v.nextPassMs))}, in ${fmtCountdown(v.nextPassMs - nowMs)}`);
-  } else {
-    setText("rqs-next", "--");
-  }
-  setText("rqs-el", isNum(v.passElDeg) ? `${Math.round(v.passElDeg)}°` : v.state === "none" ? "--" : "not in a pass");
-  setText("rqs-corr", isNum(v.passCorr) ? v.passCorr.toFixed(2) : "--");
+  const d = v.distance, short = (m) => (m < 10 ? m.toFixed(1) : String(Math.round(m)));
+  setText("rqs-dist", d.state === "estimate" && isNum(d.lo) && isNum(d.hi) ? `${d.text} (${short(d.lo)} to ${short(d.hi)})` : d.text);
+  setText("rqs-excess", isNum(rec?.rfExcessDb) ? `${rec.rfExcessDb >= 0 ? "+" : ""}${rec.rfExcessDb.toFixed(1)} dB` : "--");
+  setText("rqs-mode", v.state === "none" ? "--" : v.ground ? "Ground station" : "Satellite");
 
   const rows = $("rqs-why-rows");
   const items = whyLines(rec, meta, unit).map(([title, text]) => {

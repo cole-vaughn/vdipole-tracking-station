@@ -16,7 +16,6 @@
   "devDependencies": {
     "@playwright/test": "1.64.1",
     "esbuild": "^0.28.2",
-    "globe.gl": "^2.46.2",
     "satellite.js": "7.1.0",
     "three": "^0.186.1"
   }

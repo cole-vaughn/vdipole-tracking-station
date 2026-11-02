@@ -4,7 +4,7 @@
 import { build } from "esbuild";
 
 const common = { bundle: true, format: "esm", minify: true, target: "es2020", legalComments: "linked", logLevel: "info" };
-await build({ ...common, entryPoints: ["tools/vendor/globe-entry.js"], outfile: "site/vendor/globe.lib.js" });
+await build({ ...common, entryPoints: ["tools/vendor/scene-entry.js"], outfile: "site/vendor/scene.lib.js" });
 // satellite.js also ships optional WebAssembly runtimes that mention Node.js modules; the site never loads them,
 // so they are marked external and tree-shaking drops them (checked below).
 await build({

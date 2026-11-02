@@ -18,3 +18,6 @@ tests/screenshots/
 
 # Made by the deploy workflow (tools/make-passes.mjs); expires after 48 h, so it is never committed.
 site/data/passes.json
+
+# Course checkpoint drafts and class documents: kept on this computer only, never published.
+checkpoints/

@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Satellite V-Dipole Tracking Station</title>
-  <meta name="description" content="Live data from a 137 MHz V-dipole ground station: radio level, battery, environment, and the Meteor-M2-4 weather satellite on a 3D globe.">
+  <title>V-Dipole Tracking Station</title>
+  <meta name="description" content="Live data from a 137 MHz V-dipole ground radio station: signal score, distance to a test transmitter, battery and environment.">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#0a0e14">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0e14'/%3E%3Cpath d='M5 8 16 22 27 8' fill='none' stroke='%234fd1ff' stroke-width='3' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='24' r='2.5' fill='%23ffb454'/%3E%3C/svg%3E">
@@ -21,7 +21,7 @@
   <header class="statusbar">
     <div class="brand">
       <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M4 7 16 23 28 7"/><circle cx="16" cy="25" r="2.6"/></svg>
-      <h1>Satellite V-Dipole Tracking Station</h1>
+      <h1>V-Dipole Tracking Station</h1>
     </div>
     <dl class="meta">
       <div><dt>Data age</dt><dd id="age">--</dd></div>
@@ -45,7 +45,7 @@
       <div><dt>Data age</dt><dd id="d-age">--</dd></div>
       <div><dt>Clock offset</dt><dd id="d-offset">--</dd></div>
       <div><dt>Firmware</dt><dd id="d-fw">--</dd></div>
-      <div><dt>Orbit data age</dt><dd id="d-tle">--</dd></div>
+      <div><dt>Station mode</dt><dd id="d-mode">--</dd></div>
       <div><dt>RF baseline (from the station)</dt><dd id="d-rf">--</dd></div>
       <div><dt>Charging inference (untuned)</dt><dd id="d-charge">--</dd></div>
       <div><dt>Last error</dt><dd id="d-error">none</dd></div>
@@ -92,9 +92,9 @@
         <figcaption><span>30 min ago</span><span>score, last 30 minutes</span><span>now</span></figcaption>
       </figure>
       <dl class="detail rqs-detail">
-        <div><dt>Next pass</dt><dd id="rqs-next">--</dd></div>
-        <div><dt>Expected elevation</dt><dd id="rqs-el">--</dd></div>
-        <div><dt>Pass correlation</dt><dd id="rqs-corr">--</dd></div>
+        <div><dt>Distance (est.)</dt><dd id="rqs-dist">--</dd></div>
+        <div><dt>Above the floor</dt><dd id="rqs-excess">--</dd></div>
+        <div><dt>Mode</dt><dd id="rqs-mode">--</dd></div>
       </dl>
       <button type="button" class="btn rqs-why-btn" id="rqs-why-btn" aria-expanded="false" aria-controls="rqs-why">Why this score?</button>
       <div class="rqs-why" id="rqs-why" role="region" aria-labelledby="rqs-why-h" hidden>
@@ -103,34 +103,25 @@
       </div>
     </section>
 
-    <section class="panel globe-panel" aria-labelledby="globe-h">
+    <section class="panel scene-panel" aria-labelledby="scene-h">
       <header class="panel-head">
-        <h2 id="globe-h"><span id="sat-name">Meteor-M2-4</span> <span class="sub" id="sat-downlink"></span></h2>
-        <span class="tag" id="sat-vis">--</span>
+        <h2 id="scene-h">Radio link <span class="sub">test tower (NanoVNA, 137.5 MHz) to the station</span></h2>
+        <span class="tag" id="link-state">--</span>
       </header>
-      <div class="globe" id="globe">
-        <p class="globe-msg" id="globe-msg">Loading globe</p>
+      <div class="scene" id="scene">
+        <div class="scene-labels" id="scene-labels" aria-hidden="true"></div>
+        <p class="scene-msg" id="scene-msg">Loading the 3D view</p>
       </div>
-      <div class="globe-bar">
+      <div class="scene-bar">
         <dl class="readouts">
-          <div><dt>Azimuth</dt><dd id="sat-az">--</dd></div>
-          <div><dt>Elevation</dt><dd id="sat-el">--</dd></div>
-          <div><dt>Range</dt><dd id="sat-range">--</dd></div>
-          <div><dt>Next pass</dt><dd id="sat-next">--</dd></div>
-          <div><dt>Orbit data</dt><dd id="sat-tle">--</dd></div>
+          <div><dt>Estimated distance</dt><dd id="link-dist">--</dd></div>
+          <div><dt>Likely range</dt><dd id="link-range">--</dd></div>
+          <div><dt>Signal power</dt><dd id="link-signal">--</dd></div>
+          <div><dt>Calibration</dt><dd id="link-cal">--</dd></div>
         </dl>
-        <div class="globe-buttons">
-          <button type="button" class="btn" id="follow-btn" aria-pressed="false">Follow satellite</button>
-          <button type="button" class="btn" id="reset-btn">Reset view</button>
-        </div>
+        <div class="scene-buttons"><button type="button" class="btn" id="reset-btn">Reset view</button></div>
       </div>
-      <div class="passes">
-        <h3 class="passes-head">Upcoming passes <span class="sub">your local time, from the orbit data</span></h3>
-        <table class="pass-table">
-          <thead><tr><th scope="col">Day</th><th scope="col">Starts</th><th scope="col">Ends</th><th scope="col">Length</th><th scope="col">Highest</th></tr></thead>
-          <tbody id="pass-rows"><tr><td colspan="5">--</td></tr></tbody>
-        </table>
-      </div>
+      <p class="note scene-note">Drag to turn the view. Ground distances are to scale; the models are enlarged so they can be seen. The distance comes from signal strength (a log-distance path-loss model calibrated on site), so it is shown with its likely range.</p>
     </section>
 
     <section class="panel battery-panel" aria-labelledby="batt-h">
@@ -175,9 +166,9 @@
         <div><dt>Above baseline</dt><dd><span id="rf-excess">--</span> dB</dd></div>
         <div><dt>Reading</dt><dd><span id="rf-dbm">--</span> dBm</dd></div>
         <div><dt>Baseline</dt><dd id="rf-base">--</dd></div>
-        <div><dt>Satellite elevation</dt><dd id="rf-el">--</dd></div>
+        <div><dt>Distance (est.)</dt><dd id="rf-dist">--</dd></div>
       </dl>
-      <p class="note">One power number from the antenna chain, not a spectrum. The baseline comes from the station. A rise can be interference: the reception quality score checks it against the predicted pass.</p>
+      <p class="note">One power number from the antenna chain, not a spectrum. The baseline comes from the station. A rise could be any 137 MHz transmitter, not only the test tower.</p>
     </section>
 
     <section class="panel fan-panel" aria-labelledby="fan-h">
@@ -238,8 +229,8 @@
   </section>
 
   <footer class="footer">
-    <p>Live readings from a student-built 137 MHz ground station (V-dipole antenna, LNA with 137 MHz filter, log power detector, ESP32). Every number on this page comes from the station or from public orbit data. Missing readings show as "--".</p>
-    <p>Satellite positions: SGP4 from CelesTrak orbital elements. Globe: NASA Blue Marble and NASA Earth at Night, lit by the real Sun position. The satellite model is illustrative and not to scale.</p>
+    <p>Live readings from a student-built 137 MHz ground radio station (V-dipole antenna, LNA with 137 MHz filter, log power detector, ESP32). Every number on this page comes from the station. Missing readings show as "--".</p>
+    <p>The 3D tower and station are illustrations; only the distance between them comes from the station's measurement.</p>
   </footer>
 </body>
 </html>

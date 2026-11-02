@@ -1,6 +1,7 @@
-# Satellite V-Dipole Tracking Station: Dashboard v2 Spec
+# V-Dipole Tracking Station: Dashboard v2 Spec
 
-Status: v1 site built (section 13). Battery state of health was cancelled on 2026-11-01 (Cole) and is replaced by the reception quality score (section 14) as the course "go beyond" algorithm. Section 14 and the firmware 1.2 changes in section 15 were built on 2026-11-01 (not committed until Cole approves): tested on a PC and against labeled fixtures, compiled for the ESP32, not yet run on the station. Build report: 14.22.
+Status (2026-11-01, evening): the site and firmware 1.3 now focus on a ground radio station (section 16): a test transmitter (the NanoVNA "tower"), a 3D view of the link, ground mode for the score, and a distance estimate from signal strength. The satellite pages are kept on the git branch `satellite-tracking`; the satellite design below (sections 7 to 8, 14) stays as the record of that work and of firmware satellite mode.
+Earlier status: v1 site built (section 13). Battery state of health was cancelled on 2026-11-01 (Cole) and is replaced by the reception quality score (section 14) as the course "go beyond" algorithm. Section 14 and the firmware 1.2 changes in section 15 were built on 2026-11-01 (not committed until Cole approves): tested on a PC and against labeled fixtures, compiled for the ESP32, not yet run on the station. Build report: 14.22.
 Last updated: 2026-11-01. This file replaces the draft PDF as the source of truth.
 
 Rules that apply to everything below:
@@ -54,6 +55,8 @@ Success criteria (from the draft, unchanged):
 | D21 | Cancelled 2026-11-01. Battery state of health (SOH) was built (commits 6ff2797 to 7213c52, never run on the station) and is removed from the firmware, the site, the tests and the data contract. Git history keeps the record. Kept from that work: the INA219 128-sample averaging (cleaner current for the battery estimate) and the PC test runner for firmware logic. See 14.21. | Cole replaced it with the reception quality score. | Cole, 2026-11-01 |
 | D22 | The course "go beyond" algorithm is the reception quality score (RQS): one 0 to 100 score from the RF reading, combining a causal OS-CFAR baseline and detection (Rohling 1983), a pass match against the free-space path loss shape (Friis 1946) and a health factor. Temperature for every RQS need comes from the BMP388 only, never the thermistors. Design in section 14. | Course requirement; ties the RF chain to the satellite. | RQS brief and Cole's answers, 2026-11-01 |
 | D23 | LCD (Cole, 2026-11-01): five pages. At power on it shows RF strength and the RQS; each touch goes to the next page: temperatures (thermistor and BMP388), pressure and altitude, fan RPM, battery current and time left, then back to RF. Nothing else on the LCD. See 15.1. | Cole's request. | Cole, 2026-11-01 |
+| D25 | Ground-station focus (Cole, 2026-11-01): after the real pass showed no measurable satellite signal (`docs/validation/2026-11-01-real-pass.md`), the site and the demo focus on a ground radio receiver station with a test transmitter: the NanoVNA at 137.5 MHz plays a radio tower. The page is renamed "V-Dipole Tracking Station". The globe, satellite readouts and pass table move to the git branch `satellite-tracking`; main keeps the pass schedule tools so firmware satellite mode still works. | Cole's request for the demo. | Cole, 2026-11-01 |
+| D26 | Distance estimate (Cole, 2026-11-01): the station estimates its distance to the tower from signal strength with a log-distance path-loss model calibrated on site (serial `d`), sent with a likely range. Firmware, not the site, does it (Cole's choice), so it is logged to the cloud. Ground mode (firmware 1.3, the default) sets the satellite pass part aside. See section 16. | Cole's choice; adds a fifth measurement to the go-beyond algorithm. | Cole, 2026-11-01 |
 | D24 | Calibration sketches for the capacitive sensor and the thermistor, separate from the station sketch. Each walks through a measurement over Serial and prints `#define` lines to paste into `station_firmware.ino`. See 15.2. | Cole's request. | Cole, 2026-11-01 |
 
 ## 3. The station and its data
@@ -685,3 +688,43 @@ Two separate sketches, so the station sketch stays as it is: `firmware/cal_capac
 3. `f` fits the beta model ln R = ln R0 + B x (1/T - 1/T0) by least squares. It prints `THERM_R0`, `THERM_BETA` and `THERM_OFFSET_C` (normally near 0 after the fit), with the error left at each point.
 4. If the resistance comes out impossible (negative or far off the part's range), the circuit constants are wrong rather than the thermistor. It says so and lists which values to measure with a meter (`BRIDGE_VEXC`, `V_MID`, `V_BIAS`), instead of hiding it behind an offset. This is probably where the old +96.2 C offset came from.
 
+
+## 16. Ground radio station: ground mode, distance estimate, 3D link view (2026-11-01)
+
+Built 2026-11-01 for the CP5 demo (D25, D26). Firmware 1.3 compiles; not yet flashed. Site tested against labeled fixtures.
+
+### 16.1 Ground mode (firmware `STATION_MODE_GROUND 1`, the default)
+
+- The transmitter is on the ground (the NanoVNA "tower"), so the score's satellite pass part is set aside.
+- RQS = 100 x H x (0.70 x S_snr + 0.30 x S_det), clamped 0 to 100. Same labels (15, 40, 70). Tag `GROUND`.
+- `rqsPass`, `passElDeg`, `passCorr` and `nextPassEpoch` are null. The baseline, detection, health and temperature rules of section 14 are unchanged.
+- Satellite mode (`STATION_MODE_GROUND 0`) is the section 14 design, unchanged; test mode `t` belongs to it.
+
+### 16.2 Distance from signal strength
+
+1. **Signal power:** the detector reads signal plus floor, so the floor (the baseline) is taken away as power: Ps = 10 log10(10^(P/10) - 10^(B/10)). Only when the reading stands at least 3 dB above the baseline.
+2. **Model:** log-distance path loss, Ps(d) = P1 - 10 n log10(d / 1 m). In free space n = 2 (Friis); rooms and the ground usually give about 1.6 to 3.5.
+3. **Calibration on site:** hold the tower at known distances and send `d 1`, `d 5`, `d 10` over USB. Each point averages the last 5 signal readings (10 s). Up to 6 points, saved in flash (key `distCal`). `d` shows the fit, `d x` clears it. With one point, n = 2 is assumed. With two or more, n and P1 are fitted by least squares on log10(d), and n is held inside 1 to 6.
+4. **Estimate:** d = 10^((P1 - Ps) / (10 n)). Its likely range uses the fading spread sigma: d / f to d x f with f = 10^(sigma / (10 n)). sigma = 4 dB with fewer than 3 points, otherwise the fit's own scatter, at least 2 dB. All PLACEHOLDER (`rqs.h`).
+5. **Limits:** the simple model holds beyond about 1 m (the wavelength is 2.18 m). Indoors, reflections move the reading several dB within half a meter; the orientation of the NanoVNA's cable end matters; the Kalman lag means 20 to 40 s to settle after a move. It only works for this known transmitter.
+6. **Tests (SYNTHETIC):** a tower at -20 dBm at 1 m with n = 2.2 over the -75 dBm floor, calibrated at 1, 3 and 10 m: estimates 1.94 m at 2 m, 4.94 m at 5 m, 15.98 m at 15 m, each inside its range.
+
+### 16.3 Data contract additions (Cole left the call to the agent, 2026-11-01)
+
+| Key | Where | Meaning |
+|---|---|---|
+| `distM`, `distLoM`, `distHiM` | latest and history | Estimated distance and its likely range, meters; null without a calibration or a signal 3 dB clear |
+| `distCal` | latest only | Calibration points (0 = not calibrated) |
+| `distN` | latest only | Fitted path-loss exponent |
+| `rqsTag` value `GROUND` | latest and history | Ground mode |
+| `mode` | `/station/meta` | `ground` or `satellite` |
+
+Measured (PC tests): history records about 680 bytes, latest about 765.
+
+### 16.4 Website
+
+- Renamed "V-Dipole Tracking Station". The globe, the satellite readouts and the pass table are on the branch `satellite-tracking`.
+- **3D radio link** (three.js, self-hosted `site/vendor/scene.lib.js`): the station (box with its LCD showing page 0, touch pad, fan, mast, V-dipole at 120 degrees) at the center; a lattice tower with a beacon at the station's distance estimate; the likely range shaded on the ground; signal dots and ripples sized by the real level (none at 0). Ground distances to scale, models enlarged and labeled so. No estimate: the tower is faded and labeled "no estimate", never placed at a made-up distance. Drag to turn; reduced motion stops the animation.
+- Score instrument: three bars in ground mode (the pass bar only in satellite mode), distance with its range, mode. "Why this score?" explains ground mode and the distance in plain words.
+- Radio graphs: a distance chart (estimate, low, high); the detection log shows the median distance of each detection. Pass-window shading only appears in satellite mode.
+- The RF card shows the distance in place of the satellite elevation.

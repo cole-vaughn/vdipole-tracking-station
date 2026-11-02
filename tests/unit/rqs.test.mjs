@@ -109,3 +109,55 @@ test("rqs: shading spans and the sparkline", () => {
   const pts = sparkPoints([...recs, { ts: 120e3, rqs: 5 }], 120e3, 100e3, 30e3);
   assert.deepEqual(pts.map((p) => p.y), [20, 30, 40, 50, null, 5], "only the window, a gap where the station went quiet");
 });
+
+// ---------- Ground mode and distance (SPEC 16) ----------
+import { distanceView, signalPowerDbm as sigPower, isGround } from "../../site/js/lib/rqs.js";
+
+const ground = (over = {}) => rec({
+  rqsTag: "GROUND", rqsPass: null, passElDeg: null, passCorr: null, rfFiltDbm: -40.2, rfBaselineDbm: -57.9, rfExcessDb: 17.7,
+  distM: 3.21, distLoM: 2.5, distHiM: 4.12, distCal: 3, distN: 2.3, ...over,
+});
+
+test("rqs: ground mode view hides the pass bar and shows the distance", () => {
+  const v = rqsView(ground());
+  assert.equal(v.ground, true);
+  assert.equal(v.tagWords, "ground station mode");
+  assert.equal(v.bars.find((b) => b.id === "pass").hidden, true);
+  assert.equal(v.bars.filter((b) => !b.hidden).length, 3);
+  assert.deepEqual([v.distance.state, v.distance.text, v.distance.range], ["estimate", "≈ 3.2 m", "2.5 m to 4.1 m"]);
+  assert.equal(rqsView(rec()).bars.find((b) => b.id === "pass").hidden, false, "satellite mode keeps it");
+  assert.equal(isGround(ground()), true);
+});
+
+test("rqs: distance states", () => {
+  assert.equal(distanceView(ground({ distM: 12.6, distLoM: 9.1, distHiM: 17.4 })).text, "≈ 13 m");
+  const uncal = distanceView(ground({ distM: null, distLoM: null, distHiM: null, distCal: 0 }));
+  assert.deepEqual([uncal.state, uncal.text], ["uncalibrated", "not calibrated"]);
+  const quiet = distanceView(ground({ distM: null, rfExcessDb: 0.4, rfFiltDbm: -57.5 }));
+  assert.deepEqual([quiet.state, quiet.text], ["none", "no signal"]);
+  assert.equal(distanceView(null).text, "--");
+});
+
+test("rqs: signal power takes the floor away as power", () => {
+  assert.ok(Math.abs(sigPower(ground()) - 10 * Math.log10(10 ** -4.02 - 10 ** -5.79)) < 1e-9);
+  assert.equal(sigPower(ground({ rfExcessDb: 2.9 })), null, "under 3 dB clear: not ranged, like the firmware");
+  assert.equal(sigPower(null), null);
+});
+
+test("rqs: why this score in ground mode", () => {
+  const rows = Object.fromEntries(whyLines(ground(), { rqsAlphaT: 0 }));
+  assert.match(rows["What it is"], /Ground mode/);
+  assert.match(rows.Strength, /Worth 70% of the score/);
+  assert.match(rows.Detection, /Worth 30% of the score/);
+  assert.match(rows.Distance, /About 3\.2 m, likely 2\.5 m to 4\.1 m.*3 calibration points.*n = 2\.3 here/);
+  assert.equal(rows["Pass match"], undefined);
+  assert.match(rows.Limits, /cannot tell the tower from another 137 MHz transmitter/);
+  assert.match(Object.fromEntries(whyLines(ground({ distM: null, distCal: 0 }), {})).Distance, /Not calibrated yet.*d 1, d 5, d 10/);
+});
+
+test("rqs: detection log carries the median distance", () => {
+  const h = (ts, det, d) => ({ ts, rfDetected: det, rqsTag: "GROUND", distM: d, rfExcessDb: 10, rqs: 80 });
+  const log = detectionLog([h(0, false), h(10e3, true, 3.0), h(20e3, true, 3.4), h(30e3, true, 2.9), h(40e3, false)]);
+  assert.equal(log.length, 1);
+  assert.equal(log[0].distM, 3.0);
+});

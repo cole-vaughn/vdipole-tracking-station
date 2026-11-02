@@ -2,20 +2,21 @@
 // Every number that has not been measured on the real station is marked "untuned".
 
 export const CONFIG = {
-  title: "Satellite V-Dipole Tracking Station",
+  title: "V-Dipole Tracking Station",
 
   // Firebase Realtime Database URL, for example "https://your-project-default-rtdb.firebaseio.com".
   // Public by design (the database allows public read). Empty until the Firebase project exists;
   // the page then shows a calm "not connected yet" state instead of errors.
   databaseURL: "https://vdipole-tracking-station-default-rtdb.firebaseio.com",
 
-  // Rounded to two decimals (about 1 km) on purpose. Never put a street address here.
+  // Used only by the deploy workflow's orbit and pass schedule tools (the station's satellite mode, SPEC 14.8); the
+  // page itself no longer shows satellites (ground-station focus, SPEC 16). Rounded to about 1 km on purpose.
   station: { label: "Station", lat: 33.92, lon: -84.84, altKm: 0.3 },
 
   // Station status from the age of the newest record (SPEC D7).
   freshness: { liveMs: 6000, offlineMs: 30000 },
 
-  // v1 shows the first satellite only, but the code works from this list.
+  // Satellite mode only (see above). The satellite pages are kept on the git branch "satellite-tracking".
   satellites: [
     { noradId: 59051, name: "Meteor-M2-4", downlink: "LRPT near 137.9 MHz" },
   ],

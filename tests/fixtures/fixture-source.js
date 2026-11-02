@@ -4,9 +4,9 @@
 //
 // URL options: ?autoplay=0 stops the generated live updates (tests drive it through window.__fixture).
 //
-// The reception quality score fields (SPEC 14.12) come from a made-up pass schedule below, not from orbit data and
-// not from the station: a pass in progress when the page opens, earlier passes, a low pass where nothing was heard,
-// and a burst of interference outside any pass (tagged NO PASS, so it can score at most 70).
+// The reception quality score and distance fields (SPEC 14.12, 16) come from made-up test-tower sessions below, in
+// ground mode: the tower on at 3.2 m when the page opens, an earlier calibration walk (1, 5, 10 m), and a session at
+// 15 m. Nothing here comes from the station.
 
 const params = new URLSearchParams(location.search);
 
@@ -27,51 +27,42 @@ let seed = 42;
 const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
 const noise = (a) => (rand() - 0.5) * 2 * a;
 
-// ---------- Made-up reception quality score ----------
+// ---------- Made-up reception quality score and distance (ground mode) ----------
 const T = Date.now();
 const MIN = 60e3;
-// start, length, highest elevation, and the made-up signal: dB above the floor with the satellite overhead (null: none)
-const PASSES = [
-  { start: T - 6 * MIN, len: 12 * MIN, maxEl: 48, sig: 13 },
-  { start: T - 190 * MIN, len: 11 * MIN, maxEl: 22, sig: 12 },
-  { start: T - 13 * 60 * MIN, len: 12.5 * MIN, maxEl: 64, sig: 18 },
-  { start: T - 18 * 60 * MIN, len: 6 * MIN, maxEl: 8, sig: null },
-  { start: T + 95 * MIN, len: 9 * MIN, maxEl: 15, sig: 12 },
+// Made-up tower sessions: start, length, distance in meters.
+const SESSIONS = [
+  { start: T - 8 * MIN, len: 60 * MIN, m: 3.2 },
+  { start: T - 40 * MIN, len: 2 * MIN, m: 1 },
+  { start: T - 38 * MIN, len: 3 * MIN, m: 5 },
+  { start: T - 35 * MIN, len: 3 * MIN, m: 10 },
+  { start: T - 3 * 60 * MIN, len: 10 * MIN, m: 15 },
 ];
-const BURST = { start: T - 9 * 60 * MIN, len: 4 * MIN, db: 14 };
+const P1 = -25, N = 2.3, SIGMA = 2.5;       // made-up path loss: -25 dBm at 1 m, n = 2.3
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
 const r1 = (x) => Math.round(x * 10) / 10, r2 = (x) => Math.round(x * 100) / 100;
-// Free-space loss relative to overhead, the same formula as rqs.h (Re 6371 km, h 820 km).
-function friisDb(elDeg) {
-  const e = (elDeg * Math.PI) / 180, re = 6371, rs = 6371 + 820;
-  return -20 * Math.log10((Math.sqrt(rs * rs - (re * Math.cos(e)) ** 2) - re * Math.sin(e)) / 820);
-}
 const labelOf = (v) => (v < 15 ? "NO SIGNAL" : v < 40 ? "WEAK" : v < 70 ? "GOOD" : "STRONG");
 
 function rqsFields(ts, tempC, withParts) {
-  const base = -75.2 + 0.15 * Math.sin(ts / 5.4e6), sigma = 0.3;
-  const pass = PASSES.find((p) => ts >= p.start && ts <= p.start + p.len);
-  let excess = noise(0.25), el = null, corr = null;
-  if (pass) {
-    el = 5 + (pass.maxEl - 5) * Math.sin((Math.PI * (ts - pass.start)) / pass.len);
-    if (pass.sig !== null) excess = Math.max(excess, pass.sig + friisDb(el) + noise(0.25));
-    const secs = (ts - pass.start) / 1000;
-    if (secs >= 20) corr = pass.sig === null ? 0.12 : Math.min(0.93, 0.6 + secs / 900);
-  } else if (ts >= BURST.start && ts <= BURST.start + BURST.len) {
-    excess = BURST.db + noise(0.4);
+  const base = -57.9 + 0.1 * Math.sin(ts / 5.4e6), sigma = 0.3;
+  const on = SESSIONS.find((x) => ts >= x.start && ts <= x.start + x.len);
+  let total = base + 0.2 + noise(0.2), dist = null, lo = null, hi = null;
+  if (on) {
+    const sig = P1 - 10 * N * Math.log10(on.m) + noise(1.2);   // a little fading wobble
+    total = 10 * Math.log10(10 ** (sig / 10) + 10 ** (base / 10));
+    const est = 10 ** ((P1 - sig) / (10 * N)), f = 10 ** (SIGMA / (10 * N));
+    dist = r2(est); lo = r2(est / f); hi = r2(est * f);
   }
-  const detected = excess > 4 * sigma;
+  const excess = total - base, detected = excess > 4 * sigma;
   const sSnr = clamp01(excess / 12), sDet = detected ? 1 : 0;
-  const sPass = pass ? 0.4 + 0.6 * clamp01(((corr ?? 0.3) - 0.3) / 0.6) : 0;
-  const rqs = Math.min(100, 100 * (0.5 * sSnr + 0.2 * sDet + 0.3 * sPass * sDet));
-  const next = PASSES.map((p) => p.start).filter((s) => s > ts).sort((a, b) => a - b)[0];
+  const rqs = Math.min(100, 100 * (0.7 * sSnr + 0.3 * sDet));
   const f = {
-    rfFiltDbm: r2(base + excess), rqs: r1(rqs), rqsLabel: labelOf(rqs), rqsTag: pass ? "PASS" : "NO PASS",
+    rfFiltDbm: r2(total), rqs: r1(rqs), rqsLabel: labelOf(rqs), rqsTag: "GROUND",
     rfExcessDb: r2(excess), rfBaselineDbm: r2(base), rfThresholdDbm: r2(base + 4 * sigma), rfSigmaDb: sigma,
-    rfDetected: detected, passElDeg: el === null ? null : r1(el), passCorr: corr === null ? null : r2(corr),
-    nextPassEpoch: next ? Math.floor(next / 1000) : null, rqsTempC: r2(tempC),
+    rfDetected: detected, passElDeg: null, passCorr: null, nextPassEpoch: null, rqsTempC: r2(tempC),
+    distM: dist, distLoM: lo, distHiM: hi,
   };
-  if (withParts) Object.assign(f, { rqsSnr: r2(sSnr), rqsDet: sDet, rqsPass: r2(sPass), rqsHealth: 1 });
+  if (withParts) Object.assign(f, { rqsSnr: r2(sSnr), rqsDet: sDet, rqsPass: null, rqsHealth: 1, distCal: 3, distN: N });
   return f;
 }
 
@@ -131,7 +122,7 @@ export function createSource() {
   const state = {
     latest: makeRecord(now, true),
     touch: { state: false, count: 3, ts: now - 140e3 },
-    meta: { fw: "fixture", bootTs: now - (3 * 3600 + 720) * 1000, rqsAlphaT: 0 },
+    meta: { fw: "fixture", bootTs: now - (3 * 3600 + 720) * 1000, rqsAlphaT: 0, mode: "ground" },
     connected: true,
     offset: 0,
     history: makeHistory(now),

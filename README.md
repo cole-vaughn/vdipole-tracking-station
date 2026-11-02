@@ -1,12 +1,15 @@
-# Satellite V-Dipole Tracking Station
+# V-Dipole Tracking Station
 
-A live dashboard for a student-built 137 MHz weather-satellite ground station (ELEE 4230/6230). An ESP32 reads a
-broadband RF power detector, environment sensors, a touch pad, a fan tach and the battery, and writes them to Firebase
-Realtime Database. This static site shows them live, with a 3D globe that tracks Meteor-M2-4 from public orbit data.
+A live dashboard for a student-built 137 MHz ground radio station (ELEE 4230/6230). An ESP32 reads a broadband RF power
+detector, environment sensors, a touch pad, a fan tach and the battery, and writes them to Firebase Realtime Database.
+This static site shows them live, with a 3D view of the radio link between a test transmitter (a NanoVNA playing a
+radio tower) and the station, placed at the station's own distance estimate (`SPEC.md` section 16). The earlier
+satellite-tracking version of the site (3D globe, Meteor-M2-4 passes) is kept on the git branch `satellite-tracking`.
 The station also works out a reception quality score (RQS) from its radio reading every 2 s: a 0 to 100 score that
-combines a noise baseline and detection (OS-CFAR), a match against the predicted satellite pass (free-space path
-loss) and the station's health. It is the course "go beyond" algorithm, `SPEC.md` section 14, and it is the large
-instrument at the top of the page.
+combines a noise baseline and detection (OS-CFAR) with the station's health, and in ground mode a distance estimate
+from signal strength (log-distance path loss, calibrated on site). It is the course "go beyond" algorithm, `SPEC.md`
+sections 14 and 16, and it is the large instrument on the page. Satellite mode (a match against predicted passes) is
+still in the firmware.
 
 `SPEC.md` is the source of truth for what the site does and why.
 
@@ -31,8 +34,7 @@ GitHub Actions, every 6 h --> CelesTrak orbit data --> site/data/gp.json --> thi
 | `site/js/lib/` | Pure logic with unit tests (freshness, battery, charging inference, reception quality score, SGP4, graph data). |
 | `site/data/gp.json` | Orbit data. Refreshed on every deploy. |
 | `site/data/passes.json` | The pass schedule the station fetches for its score. Made on every deploy by `tools/make-passes.mjs`; never committed (it expires after 48 h). |
-| `site/vendor/` | Self-hosted three.js, globe.gl and satellite.js, bundled by `npm run vendor` (do not edit by hand). |
-| `site/textures/` | Earth textures (4K for laptops, 2K for phones). |
+| `site/vendor/` | Self-hosted three.js (with orbit controls, for the 3D link view) and satellite.js (for the pass schedule tool), bundled by `npm run vendor` (do not edit by hand). |
 | `tests/` | Unit tests, browser tests, firmware logic tests (`tests/firmware/`, with SYNTHETIC radio readings and passes), the labeled fixture data source, the local preview server, the secret scan. |
 | `tools/fetch-orbit.mjs` | Downloads orbit data from CelesTrak. |
 | `tools/make-passes.mjs` | Writes the station's pass schedule from the orbit data. |
@@ -51,8 +53,8 @@ npm run dev:fixtures              # http://localhost:4173 with labeled TEST FIXT
 npm run dev                       # http://localhost:4173 with the real database (once config.js has its address)
 ```
 
-The site has no build step. The globe libraries are bundled once into `site/vendor/` and committed. After changing
-the version of `three`, `globe.gl` or `satellite.js` in `package.json`, run `npm install` and `npm run vendor`, then
+The site has no build step. The 3D and orbit libraries are bundled once into `site/vendor/` and committed. After
+changing the version of `three` or `satellite.js` in `package.json`, run `npm install` and `npm run vendor`, then
 commit the result.
 
 ## Tests
