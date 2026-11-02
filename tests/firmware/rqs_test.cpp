@@ -562,7 +562,7 @@ static void testRanger() {
   CHECK(!isfinite(signalPowerDbm(-58, -58)) && !isfinite(signalPowerDbm(-60, -58)), "no signal above the floor");
 
   Ranger r;
-  float d, lo, hi;
+  float d = 0, lo = 0, hi = 0;
   CHECK(!r.fitted && !r.estimate(-40, d, lo, hi), "no points, no estimate");
   r.add(3, -40);   // one point: free-space exponent assumed
   CHECK(r.fitted && near(r.nExp, 2, 1e-6) && near(r.sigmaDb, RQS_DIST_SIGMA_DB, 1e-6), "one point: n %.2f", r.nExp);
