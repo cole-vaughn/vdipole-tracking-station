@@ -1,12 +1,19 @@
-# Station firmware 1.2
+# Station firmware 1.3
 
 Single-sketch firmware for the Satellite V-Dipole Tracking Station (ESP32 DOIT DevKit V1, ELEE 4230/6230).
 It reads every sensor, drives the LCD, and uploads to Firebase Realtime Database.
 
-**Status (2026-11-01): version 1.2 compiles cleanly and has not run on the station yet.** The score logic in `rqs.h`
+**Status (2026-11-01): version 1.2 ran on the station on 2026-11-01 (one real pass logged). Version 1.3 adds ground
+mode and the distance estimate (`SPEC.md` section 16); it compiles cleanly and is not flashed yet.** The score logic in `rqs.h`
 is tested on a PC (`npm run test:firmware`, 142 checks with SYNTHETIC inputs); the sketch around it has only been
 compiled. Nothing here has been measured on the finished enclosure, so every value marked `PLACEHOLDER` in the sketch
 or in `rqs.h` is a guess until it is measured. Walk through the test checklist at the bottom.
+
+**New in 1.3:** ground mode (the default, `STATION_MODE_GROUND 1`): a ground transmitter (the NanoVNA "tower")
+instead of satellite passes, so the score is strength and detection only, tagged GROUND. A distance estimate from signal
+strength, calibrated on site with `d` (below) and saved in flash. New fields `distM`, `distLoM`, `distHiM` (latest and
+history) and `distCal`, `distN` (latest only); `mode` in `/station/meta`. LCD page 0 shows the distance in turn with
+the label.
 
 **New in 1.2:**
 
@@ -174,6 +181,9 @@ At power on the LCD shows page 0. After page 4 it returns to page 0.
 | `t` | Toggle RQS TEST MODE (pass part fixed at 0.5, tag TEST; for the NanoVNA demo). Not saved: a restart ends it |
 | `q` | RQS report: baseline, sigma, threshold, freeze state, each part, the schedule and the clock |
 | `w` | Toggle the warm-up CSV (`WARM,ms,rfFilt,rfRaw,tempRaw,tempSmooth,rfComp`) for fitting ALPHA_T |
+| `d 3` | Distance calibration: the transmitter is 3 m away right now (needs a signal 3 dB above the floor; averages the last 10 s). Up to 6 points, saved in flash |
+| `d` | Show the distance calibration and the fit |
+| `d x` | Forget the distance calibration |
 
 ## Firebase setup (Spark plan, no card needed)
 
@@ -239,7 +249,7 @@ Firebase server time in milliseconds since the epoch (`{".sv":"timestamp"}`), so
 | `uptimeS` | s | Seconds since boot |
 | `rqs` | 0 to 100 or null | Reception quality score, one decimal. Null while warming up |
 | `rqsLabel` | text | `NO SIGNAL`, `WEAK`, `GOOD`, `STRONG`, or `WARMING UP` |
-| `rqsTag` | text | `PASS`, `NO PASS`, `NO SCHEDULE`, or `TEST` |
+| `rqsTag` | text | `GROUND` (ground mode), or in satellite mode `PASS`, `NO PASS`, `NO SCHEDULE`, `TEST` |
 | `rfExcessDb` | dB or null | Compensated RF minus the baseline |
 | `rfBaselineDbm` | dBm or null | OS-CFAR baseline (20th percentile of the training cells) |
 | `rfThresholdDbm` | dBm or null | Baseline + K x sigma |
@@ -249,7 +259,9 @@ Firebase server time in milliseconds since the epoch (`{".sv":"timestamp"}`), so
 | `passCorr` | -1 to 1 or null | Pearson r between excess and the expected power, over the pass so far |
 | `nextPassEpoch` | Unix s or null | Start of the next pass that has not begun |
 | `rqsTempC` | deg C or null | The smoothed BMP388 temperature the score used; null when the sample was rejected |
-| `rqsSnr`, `rqsDet`, `rqsPass`, `rqsHealth` | 0 to 1 or null | The four parts. **In `latest` only**, not in history |
+| `rqsSnr`, `rqsDet`, `rqsPass`, `rqsHealth` | 0 to 1 or null | The four parts (`rqsPass` null in ground mode). **In `latest` only**, not in history |
+| `distM`, `distLoM`, `distHiM` | m or null | Ground mode: estimated distance to the transmitter and its likely range; null without a calibration or a signal 3 dB above the floor |
+| `distCal`, `distN` | count, number | Ground mode: calibration points and the fitted path-loss exponent. **In `latest` only** |
 
 Other paths:
 
@@ -267,6 +279,7 @@ All in the namespace `station`. Keys are at most 15 characters (an NVS limit).
 | Key | Type | Holds | Written |
 |---|---|---|---|
 | `remWh` | float | Energy left for the battery estimate | every 5 min if it moved 0.05 Wh |
+| `distCal` | blob, up to 51 bytes | Distance calibration points (version, count, pairs of meters and dBm, checksum) | on each `d` command |
 
 The RQS keeps nothing in flash.
 
@@ -321,7 +334,7 @@ The old CP4 report numbers were mock values. Do not present any of them as acqui
 
 ## First-run test checklist
 
-1. Compile (1.2 verified with the versions above).
+1. Compile (1.2 verified with the versions above; 1.3 compiles the same way).
 2. Flash with `FAN_ENABLED 0`, USB only (no 12 V). Confirm the LCD, I2C (BMP388 and INA219 lines in Serial), WiFi, and a
    successful sign-in line (`Firebase sign-in -> HTTP 200`).
 3. Check the Firebase console: `/station/latest` appears and updates, `/station/history` grows by one record per 10 s,

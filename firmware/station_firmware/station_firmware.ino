@@ -1,5 +1,5 @@
 /*
- * Satellite V-Dipole Tracking Station: complete ESP32 firmware (version 1.2)
+ * V-Dipole Tracking Station: complete ESP32 firmware (version 1.3)
  * ELEE 4230, ESP32 DOIT DevKit V1
  *
  * Everything in one sketch (plus rqs.h):
@@ -9,7 +9,9 @@
  *   - Capacitive press sensor (square wave + LM339 timing), with press counter
  *   - INA219 on the 12 V line: voltage, current, power (128-sample averaging, read every 100 ms)
  *   - Battery estimator (energy counting + voltage check, saved to flash)
- *   - Reception quality score from the RF reading (rqs.h, SPEC.md section 14), with NTP time and a pass schedule
+ *   - Reception quality score from the RF reading (rqs.h, SPEC.md sections 14 and 16). Ground mode (the default):
+ *     a ground transmitter (the NanoVNA "tower"), with a distance estimate calibrated on site (serial d).
+ *     Satellite mode: NTP time and a pass schedule.
  *   - PC fan speed from the tach wire (3-pin fan)
  *   - 16x2 LCD with 5 pages (a capacitive press changes the page; it starts on RF and the score)
  *   - Firebase Realtime Database upload (replaces ThingSpeak), in its own task
@@ -21,8 +23,8 @@
  *
  * Search this file and rqs.h for "PLACEHOLDER" to find every value that still needs a bench measurement.
  *
- * NOTE: version 1.2 compiles with arduino-cli (esp32 core 3.3.12) but has not run on the station yet.
- * Test it with the checklist in ../README.md. The score logic in rqs.h is tested on a PC (npm run test:firmware).
+ * NOTE: version 1.2 ran on the station on 2026-11-01. Version 1.3 (ground mode, distance) compiles; run the
+ * checklist in ../README.md after flashing. The score logic in rqs.h is tested on a PC (npm run test:firmware).
  */
 
 #include <Wire.h>
@@ -45,7 +47,10 @@
 #define PASSES_URL ""                 // an older secrets.h without it: no pass schedule (tag NO SCHEDULE)
 #endif
 
-#define FW_VERSION "vdipole-fw-1.2"
+#define FW_VERSION "vdipole-fw-1.3"
+
+// 1: ground radio station (a transmitter on the ground, the NanoVNA "tower"; distance estimate). 0: satellite passes.
+#define STATION_MODE_GROUND 1
 
 // Shared telemetry snapshot (loop() writes, the upload task reads). Declared up here because the Arduino IDE
 // generates function prototypes at the top of the sketch, and buildTelemetryJson() takes this type.
@@ -652,6 +657,51 @@ void refreshTouchTelemetry() {
 // (NTP) and takes the pass schedule from the upload task. Temperature comes from the BMP388 only, never the thermistors.
 unsigned long rqsLastMs = 0;
 bool warmCsv = false;                 // serial `w`: CSV for the warm-up test that fits RQS_ALPHA_T_DB_PER_C
+String dLine;                         // a `d` command being typed (it takes a number)
+unsigned long dLineMs = 0;
+
+// Distance calibration, kept in flash so a restart does not lose it (key "distCal").
+void distSave() {
+  uint8_t buf[64];
+  size_t n = rqsEng.ranger.save(buf, sizeof buf);
+  if (n) prefs.putBytes("distCal", buf, n);
+}
+
+void distLoad() {
+  uint8_t buf[64];
+  if (!prefs.isKey("distCal")) return;
+  size_t n = prefs.getBytes("distCal", buf, sizeof buf);
+  if (!rqsEng.ranger.load(buf, n)) Serial.println(F("Distance calibration in flash unreadable; starting without it."));
+}
+
+void printDistance() {
+  const rqs::Ranger& g = rqsEng.ranger;
+  if (!g.fitted) { Serial.println(F("Distance: not calibrated. Hold the transmitter at a known distance and send d <meters>.")); return; }
+  Serial.print(F("Distance fit: ")); Serial.print(g.n); Serial.print(F(" points, ")); Serial.print(g.p1m, 1);
+  Serial.print(F(" dBm at 1 m, exponent ")); Serial.print(g.nExp, 2); Serial.print(g.clamped ? F(" (held at a limit)") : F(""));
+  Serial.print(F(", spread ")); Serial.print(g.sigmaDb, 1); Serial.println(F(" dB"));
+  for (uint8_t i = 0; i < g.n; i++) {
+    Serial.print(F("  ")); Serial.print(g.pts[i].m, 2); Serial.print(F(" m: ")); Serial.print(g.pts[i].dbm, 1); Serial.println(F(" dBm"));
+  }
+  if (g.n == 1) Serial.println(F("  One point: assumes free space (exponent 2). Add points at other distances to fit it."));
+}
+
+// `d` = show the calibration, `d 3` = the transmitter is 3 m away now, `d x` = forget the calibration.
+void distanceCommand(String arg) {
+  arg.trim();
+  if (!arg.length()) { printDistance(); return; }
+  if (arg == "x") { rqsEng.ranger.clear(); prefs.remove("distCal"); Serial.println(F("Distance calibration cleared.")); return; }
+  float m = arg.toFloat();
+  rqs::DistAdd r = rqsEng.addDistancePoint(m);
+  if (r == rqs::DIST_BAD_DISTANCE) { Serial.println(F("Give the distance in meters, 0.3 to 200, for example: d 3")); return; }
+  if (r == rqs::DIST_NO_SIGNAL) {
+    Serial.println(F("No signal 3 dB clear of the noise floor in the last 10 s. Turn the transmitter on, wait, try again."));
+    return;
+  }
+  distSave();
+  Serial.print(F("Point saved at ")); Serial.print(m, 2); Serial.println(F(" m."));
+  printDistance();
+}
 
 // Shared with the upload task, under telMutex: it parses a fetched schedule into schedNext, loop() copies it in.
 rqs::Schedule schedNext;
@@ -888,7 +938,7 @@ void uploadTask(void* arg) {
 
     if (!metaSent) {
       String meta = String("{\"fw\":\"") + FW_VERSION + "\",\"bootTs\":{\".sv\":\"timestamp\"},\"rqsAlphaT\":" +
-                    String(RQS_ALPHA_T_DB_PER_C, 4) + "}";
+                    String(RQS_ALPHA_T_DB_PER_C, 4) + ",\"mode\":\"" + (STATION_MODE_GROUND ? "ground" : "satellite") + "\"}";
       if (fbSend("PUT", "/station/meta", meta) == 200) metaSent = true;
     }
 
@@ -931,11 +981,13 @@ void drawScreen() {
   switch (screenIndex) {
     case 0: {   // RF strength and the reception quality score
       const rqs::Result& q = rqsEng.result();
+      bool second = (millis() / 2000) % 2;   // the second half of line 2 takes turns every 2 s
       if (q.scored) snprintf(a, sizeof(a), "RF%6.1f %+5.1fdB", rfFiltered, q.excessDb);
       else          snprintf(a, sizeof(a), "RF %.1f dBm", rfFiltered);
-      if (!q.scored) snprintf(b, sizeof(b), "RQS warming up");
-      else           snprintf(b, sizeof(b), "RQS %.0f %s", q.rqs,           // label and tag take turns every 2 s
-                              (millis() / 2000) % 2 ? rqs::tagShort(q.tag) : rqs::labelText(q.label));
+      if (!q.scored)                       snprintf(b, sizeof(b), "RQS warming up");
+      else if (second && !isnan(q.distM))  snprintf(b, sizeof(b), "RQS %.0f ~%.1fm", q.rqs, q.distM);
+      else                                 snprintf(b, sizeof(b), "RQS %.0f %s", q.rqs,
+                                                    second ? rqs::tagShort(q.tag) : rqs::labelText(q.label));
       lcdLine(0, a); lcdLine(1, b);
       break;
     }
@@ -999,7 +1051,10 @@ void printToSerial() {
     Serial.print(F("warming up (")); Serial.print(q.training); Serial.print(F(" of ")); Serial.print(RQS_MIN_TRAIN_N);
     Serial.print(')');
   }
-  Serial.print(F("  tag ")); Serial.println(rqs::tagText(q.tag));
+  Serial.print(F("  tag ")); Serial.print(rqs::tagText(q.tag));
+  if (!isnan(q.distM)) { Serial.print(F("  distance ~")); Serial.print(q.distM, 2); Serial.print(F(" m (")); Serial.print(q.distLoM, 2);
+                         Serial.print(F(" to ")); Serial.print(q.distHiM, 2); Serial.print(')'); }
+  Serial.println();
 
   Serial.print(F("Cap     td: ")); Serial.print(capTdUs, 2);
   Serial.print(F(" us  delta: ")); Serial.print(capDeltaUs, 2);
@@ -1081,10 +1136,20 @@ void printRqsReport() {
 }
 
 void handleSerial() {
+  // A `d` command ends with Enter, or 1.5 s after the last key (for a monitor that sends no line ending).
+  if (dLine.length() && millis() - dLineMs > 1500) { distanceCommand(dLine.substring(1)); dLine = ""; }
   while (Serial.available()) {
     char c = Serial.read();
+    if (dLine.length()) {
+      if (c == '\r' || c == '\n') { distanceCommand(dLine.substring(1)); dLine = ""; }
+      else if (dLine.length() < 24) { dLine += c; dLineMs = millis(); }
+      continue;
+    }
     if (c == '\r' || c == '\n' || c == ' ') continue;
-    if (c == 'b') {
+    if (c == 'd') {
+      dLine = "d";
+      dLineMs = millis();
+    } else if (c == 'b') {
       Serial.println(F("Recapturing cap baseline, hands off the pad..."));
       if (capCaptureBaseline()) { Serial.print(F("Baseline: ")); Serial.print(capBaselineUs, 2); Serial.println(F(" us")); }
       else Serial.println(F("Baseline FAILED."));
@@ -1200,6 +1265,8 @@ void setup() {
     Serial.println(F("INA219 not found, continuing without it."));
   }
   batteryInit();
+  rqsEng.groundMode = STATION_MODE_GROUND;
+  distLoad();
 
   // Fan tach: open-collector output, one falling edge per pulse. The external 10k pull-up sits on the fan side of the
   // 10k series resistor. No internal pull-up: it would sit on the GPIO side and lift a low to about 0.6 V.
@@ -1244,7 +1311,8 @@ void setup() {
 
   Serial.println(F("Commands: b = new cap baseline, s = toggle cap stream, c = cap raw dump, m = mux test,"));
   Serial.println(F("          f = battery is full, r = reset peak current, x = clear saved battery value,"));
-  Serial.println(F("          t = RQS test mode, q = RQS report, w = warm-up CSV"));
+  Serial.println(F("          t = RQS test mode (satellite mode), q = RQS report, w = warm-up CSV,"));
+  Serial.println(F("          d = distance calibration: d 3 (transmitter 3 m away now), d (show), d x (clear)"));
   Serial.println(F("Setup complete.\n"));
 }
 

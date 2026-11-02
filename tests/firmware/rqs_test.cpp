@@ -526,7 +526,7 @@ static void testJsonAndSize() {
   CHECK(strstr(js, "\"rqsTag\":\"PASS\"") && !strstr(js, "nan"), "in a pass, no NaN: %s", js);
   CHECK(appendJson(r, true, js, 50) == -1, "reports a buffer that is too small");
   // Measured size of the new fields, for SPEC 14.13 (the old record was 417 bytes).
-  CHECK(hist <= 260 && latest - hist <= 70, "history fields %d bytes, latest-only parts %d bytes", hist, latest - hist);
+  CHECK(hist <= 300 && latest - hist <= 100, "history fields %d bytes, latest-only parts %d bytes", hist, latest - hist);
   NOTE("measured: history adds %d bytes (record about %d), latest adds %d more (about %d)", hist, 417 + hist,
        latest - hist, 417 + latest);
 }
@@ -552,6 +552,93 @@ static void testFormatAndReport() {
   CHECK(all.find("Baseline") != std::string::npos && all.find("Schedule: ok, 1 passes") != std::string::npos &&
             all.find("pass 2026-11-01") != std::string::npos && all.find("Temperature (BMP388)") != std::string::npos,
         "report:\n%s", all.c_str());
+}
+
+// ---------- Ground mode and distance (SPEC 16) ----------
+
+static void testRanger() {
+  CHECK(near(signalPowerDbm(-50, -58), 10 * log10(1e-5 - pow(10, -5.8)), 1e-4), "floor taken away as power: %.3f",
+        signalPowerDbm(-50, -58));
+  CHECK(!isfinite(signalPowerDbm(-58, -58)) && !isfinite(signalPowerDbm(-60, -58)), "no signal above the floor");
+
+  Ranger r;
+  float d, lo, hi;
+  CHECK(!r.fitted && !r.estimate(-40, d, lo, hi), "no points, no estimate");
+  r.add(3, -40);   // one point: free-space exponent assumed
+  CHECK(r.fitted && near(r.nExp, 2, 1e-6) && near(r.sigmaDb, RQS_DIST_SIGMA_DB, 1e-6), "one point: n %.2f", r.nExp);
+  CHECK(r.estimate(-40 - 6.0206f, d, lo, hi) && near(d, 6, 0.01), "6 dB weaker is twice as far: %.3f m", d);
+
+  // SYNTHETIC points from P1 = -30 dBm and n = 2.5, no noise.
+  Ranger s;
+  for (float m : {1.0f, 3.0f, 5.0f, 10.0f}) s.add(m, -30 - 25 * log10f(m));
+  CHECK(near(s.nExp, 2.5, 1e-3) && near(s.p1m, -30, 1e-3), "fit n %.3f, P1 %.2f", s.nExp, s.p1m);
+  CHECK(near(s.sigmaDb, RQS_DIST_SIGMA_MIN_DB, 1e-6), "a perfect fit still claims the minimum spread");
+  CHECK(s.estimate(-30 - 25 * log10f(7), d, lo, hi) && near(d, 7, 0.01), "7 m back: %.3f", d);
+  double f = pow(10.0, RQS_DIST_SIGMA_MIN_DB / 25.0);
+  CHECK(near(lo, 7 / f, 0.01) && near(hi, 7 * f, 0.01), "range %.2f to %.2f", lo, hi);
+  s.add(3.01f, -50);   // replaces the 3 m point
+  CHECK(s.n == 4, "a point at the same distance replaces the old one");
+
+  Ranger c;
+  c.add(1, -50); c.add(5, -40);   // stronger farther away: not a real fit
+  CHECK(c.clamped && near(c.nExp, RQS_DIST_N_MIN, 1e-6), "held at the lower limit");
+  CHECK(c.estimate(-200, d, lo, hi) && d == RQS_DIST_MAX_M, "estimates are held inside 0.3 to 200 m");
+
+  uint8_t buf[64];
+  size_t len = s.save(buf, sizeof buf);
+  Ranger t;
+  CHECK(len == 2 + 4 * 8 + 1 && t.load(buf, len) && t.n == 4 && near(t.nExp, s.nExp, 1e-6), "flash round trip");
+  buf[5] ^= 1;
+  CHECK(!t.load(buf, len), "a corrupt copy is refused");
+  for (int i = 0; i < 8; i++) s.add(20.0f + i, -60);
+  CHECK(s.n == RQS_DIST_MAX_POINTS, "at most %d points", RQS_DIST_MAX_POINTS);
+}
+
+static void testGroundMode() {
+  Station st;
+  st.eng->groundMode = true;
+  st.settle();
+  float worst = 0;
+  for (int i = 0; i < 600; i++) { const Result& r = st.tick(); if (r.rqs > worst) worst = r.rqs; }
+  const Result& q = st.eng->result();
+  CHECK(q.tag == TAG_GROUND && worst < RQS_LABEL_WEAK && !isfinite(q.sPass), "quiet: GROUND, worst %.1f", worst);
+  CHECK(!isfinite(q.distM) && q.distCal == 0, "no calibration, no distance");
+  for (int i = 0; i < 30; i++) st.tick(-50);
+  const Result& s = st.eng->result();
+  CHECK(s.detected && near(s.rqs, 100, 1e-3) && s.label == LABEL_STRONG, "strong tower signal: %.1f %s", s.rqs,
+        labelText(s.label));
+  char js[700];
+  appendJson(s, true, js, sizeof js);
+  CHECK(strstr(js, "\"rqsTag\":\"GROUND\"") && strstr(js, "\"rqsPass\":null") && strstr(js, "\"distM\":null") &&
+            strstr(js, "\"distCal\":0"),
+        "ground JSON: %s", js);
+  CHECK(!isfinite(s.passElDeg) && s.nextPassUtc == 0, "no satellite fields in ground mode");
+}
+
+static void testDistanceEndToEnd() {
+  // SYNTHETIC tower: -20 dBm at 1 m, falling 22 dB per decade (n = 2.2), over the station's -75 dBm floor.
+  auto tower = [](double m) { return -20 - 22 * log10(m); };
+  Station st;
+  st.eng->groundMode = true;
+  st.settle();
+  for (int i = 0; i < 5; i++) st.tick();
+  CHECK(st.eng->addDistancePoint(1) == DIST_NO_SIGNAL, "no point without a signal");
+  CHECK(st.eng->addDistancePoint(500) == DIST_BAD_DISTANCE, "500 m is refused");
+  for (double m : {1.0, 3.0, 10.0}) {
+    for (int i = 0; i < 40; i++) st.tick(tower(m));   // 80 s: the Kalman filter settles
+    CHECK(st.eng->addDistancePoint((float)m) == DIST_ADDED, "point at %.0f m", m);
+  }
+  CHECK(near(st.eng->ranger.nExp, 2.2, 0.15), "fitted exponent %.2f (true 2.2)", st.eng->ranger.nExp);
+  for (double m : {2.0, 5.0, 15.0}) {
+    for (int i = 0; i < 40; i++) st.tick(tower(m));
+    const Result& r = st.eng->result();
+    CHECK(isfinite(r.distM) && fabs(r.distM - m) / m < 0.15 && r.distLoM < m && r.distHiM > m,
+          "at %.0f m: estimate %.2f (%.2f to %.2f)", m, r.distM, r.distLoM, r.distHiM);
+    NOTE("tower at %.0f m: estimate %.2f m (%.2f to %.2f), signal %.1f dBm", m, r.distM, r.distLoM, r.distHiM, r.signalDbm);
+  }
+  for (int i = 0; i < 40; i++) st.tick();
+  CHECK(!isfinite(st.eng->result().distM), "tower off: no distance");
+  CHECK(st.eng->result().distCal == 3, "three points kept");
 }
 
 // The file tools/make-passes.mjs writes (run.mjs passes its path and pass count), read by the C++ parser.
@@ -603,6 +690,9 @@ int main(int argc, char** argv) {
     {"JSON fields and size", testJsonAndSize},
     {"UTC format and the q report", testFormatAndReport},
     {"the schedule tools/make-passes.mjs writes", testGeneratedSchedule},
+    {"distance fit (log-distance path loss)", testRanger},
+    {"ground mode", testGroundMode},
+    {"distance end to end with a synthetic tower", testDistanceEndToEnd},
   };
   for (auto& t : tests) {
     g_test = t.name;

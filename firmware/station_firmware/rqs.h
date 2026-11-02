@@ -72,10 +72,26 @@
 #define RQS_HOT_END_C         60.0f     // PLACEHOLDER: ...falling to RQS_H_HOT here, and staying there above
 #define RQS_H_HOT             0.7f      // PLACEHOLDER
 
+// ---------- Ground mode (SPEC 16.1): a ground transmitter instead of a satellite ----------
+#define RQS_GROUND_W_SNR      0.70f     // PLACEHOLDER: weights with the satellite pass part set aside
+#define RQS_GROUND_W_DET      0.30f     // PLACEHOLDER
+
+// ---------- Distance from signal strength (SPEC 16.2): log-distance path loss, calibrated on site ----------
+#define RQS_DIST_MAX_POINTS   6         // fixed: calibration points kept
+#define RQS_DIST_N_FREE       2.0f      // fixed: free-space exponent (Friis), used with a single calibration point
+#define RQS_DIST_N_MIN        1.0f      // PLACEHOLDER: a fitted exponent outside 1 to 6 is held at the limit
+#define RQS_DIST_N_MAX        6.0f      // PLACEHOLDER
+#define RQS_DIST_SIGMA_DB     4.0f      // PLACEHOLDER: assumed fading spread with fewer than 3 points
+#define RQS_DIST_SIGMA_MIN_DB 2.0f      // PLACEHOLDER: never claim less spread than this
+#define RQS_DIST_MIN_EXCESS_DB 3.0f     // PLACEHOLDER: the signal must stand this far above the floor to be ranged
+#define RQS_DIST_AVG_N        5         // fixed: a calibration point averages the last 5 signal readings (10 s)
+#define RQS_DIST_MIN_M        0.3f      // fixed: estimates are held inside 0.3 to 200 m
+#define RQS_DIST_MAX_M        200.0f
+
 namespace rqs {
 
 enum Label : uint8_t { LABEL_WARMING_UP, LABEL_NO_SIGNAL, LABEL_WEAK, LABEL_GOOD, LABEL_STRONG };
-enum Tag : uint8_t { TAG_PASS, TAG_NO_PASS, TAG_NO_SCHEDULE, TAG_TEST };
+enum Tag : uint8_t { TAG_PASS, TAG_NO_PASS, TAG_NO_SCHEDULE, TAG_TEST, TAG_GROUND };
 // Why the schedule is, or is not, in use right now.
 enum SchedState : uint8_t { SCHED_OK, SCHED_NO_CLOCK, SCHED_NONE, SCHED_EXPIRED };
 
@@ -94,6 +110,7 @@ inline const char* tagText(Tag t) {
     case TAG_PASS: return "PASS";
     case TAG_NO_PASS: return "NO PASS";
     case TAG_TEST: return "TEST";
+    case TAG_GROUND: return "GROUND";
     default: return "NO SCHEDULE";
   }
 }
@@ -254,6 +271,115 @@ inline float score(float sSnr, float sDet, float sPass, float health) {
   float v = 100.0f * health * (RQS_W_SNR * sSnr + RQS_W_DET * sDet + RQS_W_PASS * sPass);
   return v < 0 ? 0 : (v > 100 ? 100 : v);
 }
+
+// Ground mode: no satellite, so only strength and detection count.
+inline float groundScore(float sSnr, float sDet, float health) {
+  float v = 100.0f * health * (RQS_GROUND_W_SNR * sSnr + RQS_GROUND_W_DET * sDet);
+  return v < 0 ? 0 : (v > 100 ? 100 : v);
+}
+
+// The signal's own power: the detector reads signal plus floor, so the floor is taken away as power, not in dB.
+inline float signalPowerDbm(float totalDbm, float floorDbm) {
+  double diff = pow(10.0, totalDbm / 10.0) - pow(10.0, floorDbm / 10.0);
+  return diff > 0 ? (float)(10.0 * log10(diff)) : NAN;
+}
+
+// ---------- Distance (SPEC 16.2) ----------
+
+struct DistPoint {
+  float m = 0, dbm = 0;
+};
+
+// Log-distance path loss: P(d) = P1 - 10 n log10(d / 1 m), fitted to points measured at known distances.
+class Ranger {
+ public:
+  uint8_t n = 0;
+  DistPoint pts[RQS_DIST_MAX_POINTS];
+  bool fitted = false, clamped = false;
+  float p1m = NAN, nExp = NAN, sigmaDb = NAN;   // power at 1 m, exponent, spread used for the range
+
+  void clear() { n = 0; fit(); }
+
+  // A point at (almost) the same distance replaces the old one; when full, the oldest is dropped.
+  void add(float m, float dbm) {
+    for (uint8_t i = 0; i < n; i++) {
+      if (fabsf(pts[i].m - m) <= 0.01f * m) { pts[i].dbm = dbm; fit(); return; }
+    }
+    if (n == RQS_DIST_MAX_POINTS) { for (uint8_t i = 1; i < n; i++) pts[i - 1] = pts[i]; n--; }
+    pts[n].m = m;
+    pts[n].dbm = dbm;
+    n++;
+    fit();
+  }
+
+  void fit() {
+    fitted = clamped = false;
+    p1m = nExp = sigmaDb = NAN;
+    if (n == 0) return;
+    double sx = 0, sy = 0;
+    for (uint8_t i = 0; i < n; i++) { sx += log10(pts[i].m); sy += pts[i].dbm; }
+    double mx = sx / n, my = sy / n, sxx = 0, sxy = 0;
+    for (uint8_t i = 0; i < n; i++) {
+      double dx = log10(pts[i].m) - mx;
+      sxx += dx * dx;
+      sxy += dx * (pts[i].dbm - my);
+    }
+    double e = RQS_DIST_N_FREE;
+    if (n >= 2 && sxx > 0.002) e = -sxy / sxx / 10.0;   // points far enough apart (about 10%) to fit a slope
+    if (e < RQS_DIST_N_MIN) { e = RQS_DIST_N_MIN; clamped = true; }
+    if (e > RQS_DIST_N_MAX) { e = RQS_DIST_N_MAX; clamped = true; }
+    nExp = (float)e;
+    p1m = (float)(my + 10.0 * e * mx);
+    if (n >= 3) {
+      double ssr = 0;
+      for (uint8_t i = 0; i < n; i++) {
+        double r = pts[i].dbm - (p1m - 10.0 * e * log10(pts[i].m));
+        ssr += r * r;
+      }
+      double s = sqrt(ssr / (n - 2));
+      sigmaDb = (float)(s > RQS_DIST_SIGMA_MIN_DB ? s : RQS_DIST_SIGMA_MIN_DB);
+    } else {
+      sigmaDb = RQS_DIST_SIGMA_DB;
+    }
+    fitted = true;
+  }
+
+  // Distance and its range for a signal power; false without a fit or a usable power.
+  bool estimate(float dbm, float& d, float& lo, float& hi) const {
+    if (!fitted || !isfinite(dbm)) return false;
+    auto hold = [](double v) { return (float)(v < RQS_DIST_MIN_M ? RQS_DIST_MIN_M : (v > RQS_DIST_MAX_M ? RQS_DIST_MAX_M : v)); };
+    double mid = pow(10.0, (p1m - dbm) / (10.0 * nExp)), f = pow(10.0, sigmaDb / (10.0 * nExp));
+    d = hold(mid);
+    lo = hold(mid / f);
+    hi = hold(mid * f);
+    return true;
+  }
+
+  // Flash copy: version, count, then pairs of floats, then a byte sum. Returns the length, 0 if it did not fit.
+  size_t save(uint8_t* buf, size_t cap) const {
+    size_t len = 2 + n * 8 + 1;
+    if (len > cap) return 0;
+    buf[0] = 1;
+    buf[1] = n;
+    // Field by field, so struct padding never matters.
+    for (uint8_t i = 0; i < n; i++) { memcpy(buf + 2 + i * 8, &pts[i].m, 4); memcpy(buf + 6 + i * 8, &pts[i].dbm, 4); }
+    uint8_t sum = 0;
+    for (size_t i = 0; i + 1 < len; i++) sum = (uint8_t)(sum + buf[i]);
+    buf[len - 1] = sum;
+    return len;
+  }
+
+  bool load(const uint8_t* buf, size_t len) {
+    if (len < 3 || buf[0] != 1 || buf[1] > RQS_DIST_MAX_POINTS || len != (size_t)(2 + buf[1] * 8 + 1)) return false;
+    uint8_t sum = 0;
+    for (size_t i = 0; i + 1 < len; i++) sum = (uint8_t)(sum + buf[i]);
+    if (sum != buf[len - 1]) return false;
+    n = buf[1];
+    for (uint8_t i = 0; i < n; i++) { memcpy(&pts[i].m, buf + 2 + i * 8, 4); memcpy(&pts[i].dbm, buf + 6 + i * 8, 4); }
+    fit();
+    return true;
+  }
+};
 
 inline Label labelFor(float rqs) {
   if (!isfinite(rqs)) return LABEL_WARMING_UP;
@@ -501,14 +627,33 @@ struct Result {
   bool frozen = false;
   float frozenS = 0;
   SchedState sched = SCHED_NONE;
+  float signalDbm = NAN;                          // the signal's own power, when it stands RQS_DIST_MIN_EXCESS_DB clear
+  float distM = NAN, distLoM = NAN, distHiM = NAN; // estimated distance and its range (ground mode, calibrated)
+  uint8_t distCal = 0;                            // calibration points
+  float distN = NAN;                              // fitted path-loss exponent
 };
+
+enum DistAdd : uint8_t { DIST_ADDED, DIST_NO_SIGNAL, DIST_BAD_DISTANCE };
 
 typedef void (*LineFn)(const char* line, void* ctx);
 
 class Engine {
  public:
-  bool testMode = false;                    // serial `t`; never saved
+  bool testMode = false;                    // serial `t`; never saved; satellite mode only
+  bool groundMode = false;                  // ground transmitter (tower) instead of satellite passes
   float alphaT = RQS_ALPHA_T_DB_PER_C;      // dB per C; a member so the PC tests can try a nonzero value
+  Ranger ranger;                            // distance calibration (serial `d`)
+
+  // Adds a calibration point at a known distance from the mean of the last RQS_DIST_AVG_N signal readings.
+  DistAdd addDistancePoint(float meters) {
+    if (!(meters >= RQS_DIST_MIN_M && meters <= RQS_DIST_MAX_M)) return DIST_BAD_DISTANCE;
+    double sum = 0;
+    int good = 0;
+    for (int i = 0; i < RQS_DIST_AVG_N; i++) if (isfinite(recentSig_[i])) { sum += pow(10.0, recentSig_[i] / 10.0); good++; }
+    if (good < 3) return DIST_NO_SIGNAL;
+    ranger.add(meters, (float)(10.0 * log10(sum / good)));
+    return DIST_ADDED;
+  }
 
   void setSchedule(const Schedule& s) { sched_ = s; }
   const Schedule& schedule() const { return sched_; }
@@ -577,10 +722,18 @@ class Engine {
     r.frozen = frozen_;
     r.frozenS = frozenS_;
 
-    // 5. Pass match.
+    // Signal power and distance (SPEC 16.2): only when the signal stands clear of the floor.
+    if (r.scored && r.excessDb >= RQS_DIST_MIN_EXCESS_DB) r.signalDbm = signalPowerDbm(r.rfComp, r.baselineDbm);
+    recentSig_[sigHead_] = r.signalDbm;
+    sigHead_ = (uint8_t)((sigHead_ + 1) % RQS_DIST_AVG_N);
+    if (groundMode) ranger.estimate(r.signalDbm, r.distM, r.distLoM, r.distHiM);
+    r.distCal = ranger.n;
+    r.distN = ranger.fitted ? ranger.nExp : NAN;
+
+    // 5. Pass match (satellite mode only).
     r.sched = schedState(in.nowUtc);
     const Pass* cur = nullptr;
-    if (r.sched == SCHED_OK) {
+    if (r.sched == SCHED_OK && !groundMode) {
       for (uint8_t i = 0; i < sched_.n; i++) {
         const Pass& ps = sched_.p[i];
         if (in.nowUtc >= ps.aos && in.nowUtc <= ps.los) cur = &ps;
@@ -595,7 +748,8 @@ class Engine {
     } else {
       passAos_ = 0;
     }
-    if (testMode) r.tag = TAG_TEST;
+    if (groundMode) r.tag = TAG_GROUND;
+    else if (testMode) r.tag = TAG_TEST;
     else if (r.sched != SCHED_OK) r.tag = TAG_NO_SCHEDULE;
     else r.tag = cur ? TAG_PASS : TAG_NO_PASS;
 
@@ -609,9 +763,13 @@ class Engine {
     if (r.scored) {
       r.sSnr = clamp01(r.excessDb / RQS_D_FULL_DB);
       r.sDet = detected_ ? 1.0f : 0.0f;
-      r.sPass = passPart(r.tag, r.passCorr);
       r.health = r.hBatt * r.hTemp;
-      r.rqs = score(r.sSnr, r.sDet, r.sPass * r.sDet, r.health);
+      if (groundMode) {
+        r.rqs = groundScore(r.sSnr, r.sDet, r.health);   // sPass stays NaN: there is no pass part
+      } else {
+        r.sPass = passPart(r.tag, r.passCorr);
+        r.rqs = score(r.sSnr, r.sDet, r.sPass * r.sDet, r.health);
+      }
     }
     r.label = labelFor(r.rqs);
     res_ = r;
@@ -683,6 +841,27 @@ class Engine {
       fn(b, ctx);
       shown++;
     }
+    snprintf(b, sizeof b, "Mode: %s", groundMode ? "GROUND (tower; no satellite pass part)" : "satellite");
+    fn(b, ctx);
+    if (ranger.fitted) {
+      snprintf(b, sizeof b, "Distance fit: %u points, %.1f dBm at 1 m, exponent %.2f%s, spread %.1f dB", (unsigned)ranger.n,
+               (double)ranger.p1m, (double)ranger.nExp, ranger.clamped ? " (held at a limit)" : "", (double)ranger.sigmaDb);
+    } else {
+      snprintf(b, sizeof b, "Distance: not calibrated (hold the transmitter at a known distance and send d <meters>)");
+    }
+    fn(b, ctx);
+    for (uint8_t i = 0; i < ranger.n; i++) {
+      snprintf(b, sizeof b, "  point %.2f m: %.1f dBm", (double)ranger.pts[i].m, (double)ranger.pts[i].dbm);
+      fn(b, ctx);
+    }
+    if (isfinite(r.distM)) {
+      snprintf(b, sizeof b, "  now: %.2f m (%.2f to %.2f), signal %.1f dBm", (double)r.distM, (double)r.distLoM,
+               (double)r.distHiM, (double)r.signalDbm);
+    } else {
+      snprintf(b, sizeof b, "  now: %s", isfinite(r.signalDbm) ? "signal clear of the floor, no fit yet"
+                                                             : "no signal 3 dB clear of the floor");
+    }
+    fn(b, ctx);
   }
 
  private:
@@ -700,6 +879,8 @@ class Engine {
   int64_t passAos_ = 0;
   Pearson corr_;
   Result res_;
+  float recentSig_[RQS_DIST_AVG_N] = {NAN, NAN, NAN, NAN, NAN};
+  uint8_t sigHead_ = 0;
 };
 
 // ---------- Firebase fields (14.12) ----------
@@ -746,7 +927,15 @@ inline int appendJson(const Result& r, bool withParts, char* buf, size_t cap) {
     raw("null");
   }
   number("rqsTempC", r.tempC, 2);
+  number("distM", r.distM, 2);
+  number("distLoM", r.distLoM, 2);
+  number("distHiM", r.distHiM, 2);
   if (withParts) {
+    key("distCal");
+    char t[8];
+    snprintf(t, sizeof t, "%u", (unsigned)r.distCal);
+    raw(t);
+    number("distN", r.distN, 2);
     number("rqsSnr", r.sSnr, 2);
     number("rqsDet", r.sDet, 2);
     number("rqsPass", r.sPass, 2);
