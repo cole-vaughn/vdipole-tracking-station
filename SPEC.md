@@ -68,7 +68,7 @@ So the site must handle null, missing and unverified data from day one.
 | Subsystem | What the number can and cannot mean |
 |---|---|
 | BMP388 | Air temperature and pressure. Altitude uses a fixed 1013.25 hPa sea level, so it drifts with weather and is not true altitude. The board was physically damaged, so treat it as unconfirmed until Cole checks it. `tempC` is the raw `bmp.temperature` reading (checked 2026-11-01: no offset or constant is added; the only processing is the chip's own factory trim and its noise filter setting). It sits elsewhere in the box, away from both the AD8307 and the ESP32 (Cole, 2026-11-01), so it reads box air. It is the only temperature the RQS uses (section 14). |
-| Thermistor | Carries a +96.2 C legacy offset in the conversion (the constant was named `BMP388_CALIBRATION_OFFSET` but is added to the thermistor, not the BMP388; renamed `THERM_OFFSET_C` in 1.2). Show an "unverified" tag on every thermistor value and chart until Cole confirms it agrees with the BMP388. One config flag removes the tag. Not used by the RQS. The calibration sketch in 15.2 replaces the offset with fitted constants. |
+| Thermistor | Carries a +96.2 C legacy offset in the conversion (the constant was named `BMP388_CALIBRATION_OFFSET` but is added to the thermistor, not the BMP388; renamed `THERM_OFFSET_C` in 1.2). The "unverified" tag on the thermistor value and its two charts was removed on 2026-11-02 at Cole's request (site/index.html, site/js/ui/graphs.js). Not used by the RQS. The calibration sketch in 15.2 replaces the offset with fitted constants. |
 | RF chain | One broadband power number in dBm (about -75 dBm with no signal). Not a spectrum. Cannot tell a satellite from interference by itself; the RQS pass match (14.8) is how the station argues that a rise is the satellite. Flat until the SAWbird has power (planned: a stripped USB-C cable) and the chain is checked with a NanoVNA (O15). |
 | Touch pad | touched, count since boot, delay, delta, fault flag. Thresholds need re-tuning after final assembly. |
 | INA219 | Voltage, current and power on the 12 V line, between the button and the buck converter. It measures what the system draws. |
@@ -156,7 +156,7 @@ The 25 original keys under `/station/latest` (and each history record): ts, temp
 | RF meter | rfFiltDbm, rfExcessDb (level), rfBaselineDbm; rfRawDbm, rfThresholdDbm, rfDetected (graph) |
 | Fan card | fanRpm, fanStalled |
 | Touch card | touched, touchCount, capFault, capDeltaUs (detail), last touch time |
-| Environment | tempC, thermFilt (tagged unverified), thermRaw |
+| Environment | tempC, thermFilt, thermRaw |
 | Graphs only | pressHPa, altM, capTdUs, capDeltaUs, capPF (labeled uncalibrated) |
 
 ## 7. Features for v1
@@ -270,7 +270,7 @@ A10. **Renaming touches the firmware.** The sketch file, its version string, the
 
 A11. **Two TLS clients on an ESP32 can exhaust heap.** The firmware keeps two secure clients alive. This is a firmware risk, not a site risk, noted for the compile-and-run step. (2026-11-01:) the pass schedule fetch adds a third client object, but it connects only every 6 hours and closes right after, while the sign-in client is closed, so at most two TLS sessions are open at once, as before.
 
-A12. **Thermistor offset of +96.2 C.** Without the unverified tag, thermistor charts could be read as truth. Tag stays until Cole clears it.
+A12. **Thermistor offset of +96.2 C.** The unverified tag was removed on 2026-11-02 at Cole's request, so the thermistor charts can now be read as truth; the thermistor is not used by the RQS.
 
 ## 13. Task list
 

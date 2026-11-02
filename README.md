@@ -110,7 +110,7 @@ v1 shows the first satellite in the list. The orbit code works for any of them.
   detector chip.
 - The battery percent is an estimate. "Charging" is only ever inferred, and its badge stays off until it is tuned on a
   real logged charge (`charging.showBadge` in `config.js`; the live inference is visible in Diagnostics).
-- The thermistor carries an unverified legacy calibration and is tagged "unverified" until checked against the BMP388.
+- The thermistor carries a fixed +96.2 C offset from CP3 and is not used by the score. The site's "unverified" tag was removed on 2026-11-02 at Cole's request.
 
 ## Credits
 

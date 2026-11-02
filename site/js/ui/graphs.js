@@ -13,8 +13,8 @@ const GROUPS = [
     { id: "bmp-temp", title: "BMP388 temperature", unit: "temp", series: [{ field: "tempC", label: "BMP388", color: C.amber }] },
     { id: "pressure", title: "Pressure", unit: "hPa", digits: 1, series: [{ field: "pressHPa", label: "Pressure", color: C.accent }] },
     { id: "altitude", title: "Altitude from pressure", unit: "m", note: "Drifts with the weather, not true altitude", series: [{ field: "altM", label: "Altitude", color: C.accent }] },
-    { id: "therm", title: "Thermistor raw vs filtered", unit: "temp", note: "Unverified calibration", series: [raw("thermRaw"), { field: "thermFilt", label: "Filtered", color: C.accent }] },
-    { id: "bmp-therm", title: "BMP388 vs thermistor", unit: "temp", note: "Thermistor unverified", series: [{ field: "tempC", label: "BMP388", color: C.amber }, { field: "thermFilt", label: "Thermistor", color: C.accent }] },
+    { id: "therm", title: "Thermistor raw vs filtered", unit: "temp", series: [raw("thermRaw"), { field: "thermFilt", label: "Filtered", color: C.accent }] },
+    { id: "bmp-therm", title: "BMP388 vs thermistor", unit: "temp", series: [{ field: "tempC", label: "BMP388", color: C.amber }, { field: "thermFilt", label: "Thermistor", color: C.accent }] },
   ] },
   { id: "radio", label: "Radio", detections: true, charts: [
     { id: "rf", title: "RF power, baseline and threshold", unit: "dBm", digits: 1, note: "Broadband, not a spectrum", shade: true, series: [
